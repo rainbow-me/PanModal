@@ -21,7 +21,7 @@ Pod::Spec.new do |s|
   s.homepage         = 'https://github.com/slackhq/PanModal'
   s.license          = { :type => 'MIT', :file => 'LICENSE' }
   s.author           = { 'slack' => 'opensource@slack.com' }
-  s.source           = { :git => 'https://github.com/slackhq/PanModal.git', :tag => s.version.to_s }
+  s.source           = { :git => 'https://github.com/osdnk/PanModal.git', :tag => s.version.to_s }
   s.social_media_url = 'https://twitter.com/slackhq'
   s.ios.deployment_target = '10.0'
   s.swift_version = '5.0'
