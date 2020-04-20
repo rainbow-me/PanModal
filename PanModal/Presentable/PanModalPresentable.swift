@@ -20,6 +20,9 @@ import UIKit
  ```
  */
 public protocol PanModalPresentable: AnyObject {
+ 
+    func hide()
+    func unhackParent()
 
     /**
      The scroll view embedded in the view controller.
