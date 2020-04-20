@@ -5,7 +5,6 @@
 //  Copyright © 2019 Tiny Speck, Inc. All rights reserved.
 //
 
-#if os(iOS)
 import UIKit
 
 /**
@@ -31,6 +30,7 @@ open class PanModalPresentationController: UIPresentationController {
     public enum PresentationState {
         case shortForm
         case longForm
+        case hidden
     }
 
     /**
@@ -78,6 +78,7 @@ open class PanModalPresentationController: UIPresentationController {
      The y value for the short form presentation state
      */
     private var shortFormYPosition: CGFloat = 0
+  private var bottomYPos: CGFloat = 0
 
     /**
      The y value for the long form presentation state
@@ -113,7 +114,7 @@ open class PanModalPresentationController: UIPresentationController {
         }
         view.didTap = { [weak self] _ in
             if self?.presentable?.allowsTapToDismiss == true {
-                self?.presentedViewController.dismiss(animated: true)
+                self?.dismissPresentedViewController()
             }
         }
         return view
@@ -192,14 +193,7 @@ open class PanModalPresentationController: UIPresentationController {
         })
     }
 
-    override public func presentationTransitionDidEnd(_ completed: Bool) {
-        if completed { return }
-
-        backgroundView.removeFromSuperview()
-    }
-
     override public func dismissalTransitionWillBegin() {
-        presentable?.panModalWillDismiss()
 
         guard let coordinator = presentedViewController.transitionCoordinator else {
             backgroundView.dimState = .off
@@ -217,10 +211,10 @@ open class PanModalPresentationController: UIPresentationController {
         })
     }
 
-    override public func dismissalTransitionDidEnd(_ completed: Bool) {
-        if !completed { return }
-        
-        presentable?.panModalDidDismiss()
+    override public func presentationTransitionDidEnd(_ completed: Bool) {
+        if completed { return }
+
+        backgroundView.removeFromSuperview()
     }
 
     /**
@@ -264,7 +258,9 @@ public extension PanModalPresentationController {
             snap(toYPosition: shortFormYPosition)
         case .longForm:
             snap(toYPosition: longFormYPosition)
-        }
+        case .hidden:
+          snap(toYPosition: (presentedView.frame.height + shortFormYPosition))
+         }
     }
 
     /**
@@ -318,7 +314,7 @@ private extension PanModalPresentationController {
     var isPresentedViewAnchored: Bool {
         if !isPresentedViewAnimating
             && extendsPanScrolling
-            && presentedView.frame.minY.rounded() <= anchoredYPosition.rounded() {
+            && presentedView.frame.minY <= anchoredYPosition {
             return true
         }
 
@@ -374,8 +370,7 @@ private extension PanModalPresentationController {
         if ![shortFormYPosition, longFormYPosition].contains(panFrame.origin.y) {
             // if the container is already in the correct position, no need to adjust positioning
             // (rotations & size changes cause positioning to be out of sync)
-            let yPosition = panFrame.origin.y - panFrame.height + frame.height
-            presentedView.frame.origin.y = max(yPosition, anchoredYPosition)
+            adjust(toYPosition: panFrame.origin.y - panFrame.height + frame.height)
         }
         panContainerView.frame.origin.x = frame.origin.x
         presentedViewController.view.frame = CGRect(origin: .zero, size: adjustedSize)
@@ -426,6 +421,7 @@ private extension PanModalPresentationController {
             else { return }
 
         shortFormYPosition = layoutPresentable.shortFormYPos
+        bottomYPos = layoutPresentable.bottomYPos
         longFormYPosition = layoutPresentable.longFormYPos
         anchorModalToLongForm = layoutPresentable.anchorModalToLongForm
         extendsPanScrolling = layoutPresentable.allowsExtendedPanScrolling
@@ -523,7 +519,7 @@ private extension PanModalPresentationController {
                     transition(to: .shortForm)
 
                 } else {
-                    presentedViewController.dismiss(animated: true)
+                    dismissPresentedViewController()
                 }
 
             } else {
@@ -541,7 +537,7 @@ private extension PanModalPresentationController {
                     transition(to: .shortForm)
 
                 } else {
-                    presentedViewController.dismiss(animated: true)
+                    dismissPresentedViewController()
                 }
             }
         }
@@ -660,6 +656,8 @@ private extension PanModalPresentationController {
         }
 
         let yDisplacementFromShortForm = presentedView.frame.origin.y - shortFormYPosition
+      
+
 
         /**
          Once presentedView is translated below shortForm, calculate yPos relative to bottom of screen
@@ -679,6 +677,22 @@ private extension PanModalPresentationController {
         guard let nearestVal = values.min(by: { abs(number - $0) < abs(number - $1) })
             else { return number }
         return nearestVal
+    }
+
+    /**
+     Dismiss presented view
+     */
+    func dismissPresentedViewController() {
+        presentable?.panModalWillDismiss()
+        presentable?.hide()
+      let deadlineTime = DispatchTime.now() + (presentable?.transitionDuration ?? 0)
+      
+        DispatchQueue.main.asyncAfter(deadline: deadlineTime) {
+          self.presentable?.unhackParent()
+          self.presentedViewController.dismiss(animated: false) { [weak self] in
+              self?.presentable?.panModalDidDismiss()
+          }
+        }
     }
 }
 
@@ -889,4 +903,3 @@ private extension UIScrollView {
         return isDragging && !isDecelerating || isTracking
     }
 }
-#endif
