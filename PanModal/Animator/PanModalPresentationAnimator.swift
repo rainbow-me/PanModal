@@ -88,13 +88,15 @@ public class PanModalPresentationAnimator: NSObject {
         if presentable?.isHapticFeedbackEnabled == true {
             feedbackGenerator?.selectionChanged()
         }
+     
+        // To make it interactable quicker
+        transitionContext.completeTransition(true)
 
         PanModalAnimator.animate({
             panView.frame.origin.y = yPos
         }, config: presentable) { [weak self] didComplete in
             // Calls viewDidAppear and viewDidDisappear
             fromVC.endAppearanceTransition()
-            transitionContext.completeTransition(didComplete)
             self?.feedbackGenerator = nil
         }
     }
