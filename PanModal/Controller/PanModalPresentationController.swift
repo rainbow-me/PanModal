@@ -7,6 +7,17 @@
 
 import UIKit
 
+
+public class UIPanGestureRecognizerWithInitialPosition: UIPanGestureRecognizer {
+  public var initialTouchLocation: CGPoint!
+  
+  public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+    super.touchesBegan(touches, with: event)
+    initialTouchLocation = touches.first!.location(in: view)
+  }
+}
+
+
 /**
  The PanModalPresentationController is the middle layer between the presentingViewController
  and the presentedViewController.
@@ -153,7 +164,7 @@ open class PanModalPresentationController: UIPresentationController {
      Gesture recognizer to detect & track pan gestures
      */
     private lazy var panGestureRecognizer: UIPanGestureRecognizer = {
-        let gesture = UIPanGestureRecognizer(target: self, action: #selector(didPanOnPresentedView(_ :)))
+        let gesture = UIPanGestureRecognizerWithInitialPosition(target: self, action: #selector(didPanOnPresentedView(_ :)))
         gesture.minimumNumberOfTouches = 1
         gesture.maximumNumberOfTouches = 1
         gesture.delegate = self
@@ -623,7 +634,7 @@ private extension PanModalPresentationController {
         }
 
         let loc = panGestureRecognizer.location(in: presentedView)
-        return (scrollView.frame.contains(loc) || scrollView.isScrolling)
+        return ((scrollView.frame.contains(loc) && !(presentable?.shouldPrioritize(panModalGestureRecognizer: panGestureRecognizer) ?? false)) || scrollView.isScrolling)
     }
 
     /**
