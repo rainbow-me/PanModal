@@ -666,6 +666,12 @@ private extension PanModalPresentationController {
      Sets the y position of the presentedView & adjusts the backgroundView.
      */
     func adjust(toYPosition yPos: CGFloat) {
+      if presentedView.frame.origin.y == anchoredYPosition && yPos > anchoredYPosition {
+        presentable?.onTouchTop(true)
+      }
+      if yPos == anchoredYPosition && presentedView.frame.origin.y > anchoredYPosition {
+        presentable?.onTouchTop(false)
+      }
         presentedView.frame.origin.y = max(yPos, anchoredYPosition)
         
         guard presentedView.frame.origin.y > shortFormYPosition else {
