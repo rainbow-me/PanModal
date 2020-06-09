@@ -23,6 +23,7 @@ public protocol PanModalPresentable: AnyObject {
  
     func hide()
     func unhackParent()
+    func onTouchTop(_ dismissing: Bool)
 
     /**
      The scroll view embedded in the view controller.
