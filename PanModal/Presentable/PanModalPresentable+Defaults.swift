@@ -127,5 +127,9 @@ public extension PanModalPresentable where Self: UIViewController {
     func onTouchTop(_ dismissing: Bool) {
       
     }
+    var ignoreBottomOffset: Bool {
+      return false
+    }
+  
 }
 #endif
