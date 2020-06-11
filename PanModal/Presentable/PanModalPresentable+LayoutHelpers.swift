@@ -38,7 +38,7 @@ extension PanModalPresentable where Self: UIViewController {
      Length of the bottom layout guide of the presenting view controller.
      Gives us the safe area inset from the bottom.
      */
-    var bottomLayoutOffset: CGFloat {
+    public var bottomLayoutOffset: CGFloat {
 
        guard let rootVC = rootViewController
             else { return 0}
