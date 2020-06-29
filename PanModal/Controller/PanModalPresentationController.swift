@@ -670,7 +670,7 @@ private extension PanModalPresentationController {
       if presentedView.frame.origin.y == anchoredYPosition && yPos > anchoredYPosition {
         presentable?.onTouchTop(true)
       }
-      if yPos == anchoredYPosition && presentedView.frame.origin.y > anchoredYPosition {
+      if yPos == anchoredYPosition && presentedView.frame.origin.y >= anchoredYPosition {
         presentable?.onTouchTop(false)
       }
         presentedView.frame.origin.y = max(yPos, anchoredYPosition)
