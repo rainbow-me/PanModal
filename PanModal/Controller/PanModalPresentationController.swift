@@ -531,7 +531,7 @@ private extension PanModalPresentationController {
                  instead of going to the short form state first.
                  */
                 if velocity.y < 0 {
-                    transition(to: .longForm)
+                    transition(to: presentable?.longFormEnabled ?? true ? .longForm : .shortForm)
 
                 } else if (nearest(to: presentedView.frame.minY, inValues: [longFormYPosition, containerView.bounds.height]) == longFormYPosition
                     && presentedView.frame.minY < shortFormYPosition) || presentable?.allowsDragToDismiss == false {
@@ -550,7 +550,7 @@ private extension PanModalPresentationController {
                 let position = nearest(to: presentedView.frame.minY, inValues: [containerView.bounds.height, shortFormYPosition, longFormYPosition])
 
                 if position == longFormYPosition {
-                    transition(to: .longForm)
+                  transition(to: presentable?.longFormEnabled ?? true ? .longForm : .shortForm)
 
                 } else if position == shortFormYPosition || presentable?.allowsDragToDismiss == false {
                     transition(to: .shortForm)
