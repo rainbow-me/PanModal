@@ -25,6 +25,8 @@ public protocol PanModalPresentable: AnyObject {
     func unhackParent()
     func onTouchTop(_ dismissing: Bool)
     var ignoreBottomOffset: Bool { get }
+    var longFormEnabled: Bool { get }
+
 
     /**
      The scroll view embedded in the view controller.
