@@ -130,6 +130,9 @@ public extension PanModalPresentable where Self: UIViewController {
     var ignoreBottomOffset: Bool {
       return false
     }
+     var longFormEnabled: Bool {
+      return true
+    }
   
 }
 #endif
