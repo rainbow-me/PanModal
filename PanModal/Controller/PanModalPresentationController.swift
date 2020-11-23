@@ -136,11 +136,21 @@ open class PanModalPresentationController: UIPresentationController {
      the presented view apperance without changing
      the presented view's properties
      */
-    private lazy var panContainerView: PanContainerView = {
+    var panContainerViewMemoized: PanContainerView? = nil
+    private var panContainerView: PanContainerView {
+      get {
+        if panContainerViewMemoized != nil {
+          return panContainerViewMemoized!
+        }
         let frame = containerView?.frame ?? .zero
-        return PanContainerView(presentedView: presentedViewController.view, frame: frame)
-    }()
-
+        let container = PanContainerView(presentedView: presentedViewController.view, frame: frame)
+        if frame.height != 0 {
+          panContainerViewMemoized = container
+        }
+        return container
+      }
+    }
+  
     /**
      Drag Indicator View
      */
