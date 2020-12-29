@@ -110,6 +110,8 @@ open class PanModalPresentationController: UIPresentationController {
     private var presentable: PanModalPresentable? {
         return presentedViewController as? PanModalPresentable
     }
+  
+    @objc dynamic public var yPosition: CGFloat = 0.0
 
     // MARK: - Views
 
@@ -399,6 +401,7 @@ private extension PanModalPresentationController {
             // (rotations & size changes cause positioning to be out of sync)
             let yPosition = panFrame.origin.y - panFrame.height + frame.height
             presentedView.frame.origin.y = max(yPosition, anchoredYPosition)
+            self.yPosition = presentedView.frame.origin.y
         }
         panContainerView.frame.origin.x = frame.origin.x
         presentedViewController.view.frame = CGRect(origin: .zero, size: adjustedSize)
@@ -684,6 +687,7 @@ private extension PanModalPresentationController {
         presentable?.onTouchTop(false)
       }
         presentedView.frame.origin.y = max(yPos, anchoredYPosition)
+        self.yPosition = presentedView.frame.origin.y
         
         guard presentedView.frame.origin.y > shortFormYPosition else {
             backgroundView.dimState = .max
@@ -852,6 +856,7 @@ private extension PanModalPresentationController {
              as if we're transferring the scrollView drag momentum to the entire view
              */
             presentedView.frame.origin.y = longFormYPosition - yOffset
+            self.yPosition = presentedView.frame.origin.y
         } else {
             scrollViewYOffset = 0
             snap(toYPosition: longFormYPosition)
