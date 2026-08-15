@@ -211,7 +211,6 @@ open class PanModalPresentationController: UIPresentationController {
         }
 
         coordinator.animate(alongsideTransition: { [weak self] _ in
-            self?.backgroundView.dimState = .max
             self?.presentedViewController.setNeedsStatusBarAppearanceUpdate()
         })
     }
@@ -229,7 +228,6 @@ open class PanModalPresentationController: UIPresentationController {
          */
         coordinator.animate(alongsideTransition: { [weak self] _ in
             self?.dragIndicatorView.alpha = 0.0
-            self?.backgroundView.dimState = .off
             self?.presentingViewController.setNeedsStatusBarAppearanceUpdate()
         })
     }
@@ -263,6 +261,10 @@ open class PanModalPresentationController: UIPresentationController {
                 self.addRoundedCorners(to: self.presentedView)
             }
         })
+    }
+
+    func setBackgroundViewDimState(_ state: DimmedView.DimState) {
+        backgroundView.dimState = state
     }
 
 }

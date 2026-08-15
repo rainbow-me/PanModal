@@ -70,6 +70,7 @@ public class PanModalPresentationAnimator: NSObject {
             else { return }
 
         let presentable = panModalLayoutType(from: transitionContext)
+        let presentationController = toVC.presentationController as? PanModalPresentationController
 
         // Calls viewWillAppear and viewWillDisappear
         fromVC.beginAppearanceTransition(false, animated: true)
@@ -94,6 +95,7 @@ public class PanModalPresentationAnimator: NSObject {
 
         PanModalAnimator.animate({
             panView.frame.origin.y = yPos
+            presentationController?.setBackgroundViewDimState(.max)
         }, config: presentable) { [weak self] didComplete in
             // Calls viewDidAppear and viewDidDisappear
             fromVC.endAppearanceTransition()
@@ -115,10 +117,12 @@ public class PanModalPresentationAnimator: NSObject {
         toVC.beginAppearanceTransition(true, animated: true)
         
         let presentable = panModalLayoutType(from: transitionContext)
+        let presentationController = fromVC.presentationController as? PanModalPresentationController
         let panView: UIView = transitionContext.containerView.panContainerView ?? fromVC.view
 
         PanModalAnimator.animate({
             panView.frame.origin.y = transitionContext.containerView.frame.height
+            presentationController?.setBackgroundViewDimState(.off)
         }, config: presentable) { didComplete in
             fromVC.view.removeFromSuperview()
             // Calls viewDidAppear and viewDidDisappear
