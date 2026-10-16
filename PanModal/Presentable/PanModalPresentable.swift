@@ -36,6 +36,14 @@ public protocol PanModalPresentable: AnyObject {
     var panScrollable: UIScrollView? { get }
 
     /**
+     Selects the panScrollable for a new touch sequence, before recognizer arbitration.
+     Update selection here without calling panModalSetNeedsLayoutUpdate(); the
+     presentation controller binds the result synchronously after this returns.
+     Changes outside this callback still require panModalSetNeedsLayoutUpdate().
+     */
+    func willReceivePanTouch(_ touch: UITouch)
+
+    /**
      The offset between the top of the screen and the top of the pan modal container view.
 
      Default value is the topLayoutGuide.length + 21.0.
@@ -129,7 +137,8 @@ public protocol PanModalPresentable: AnyObject {
      A flag to determine if scrolling should seamlessly transition from the pan modal container view to
      the embedded scroll view once the scroll limit has been reached.
 
-     Default value is false. Unless a scrollView is provided and the content height exceeds the longForm height.
+     Defaults to true when a panScrollable is provided. Content size does not
+     revoke coordination: a shrinking list may still be scrolled away from its top.
      */
     var allowsExtendedPanScrolling: Bool { get }
 

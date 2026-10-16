@@ -65,7 +65,15 @@ open class PanModalPresentationController: UIPresentationController {
      from the pan modal container view to the scroll view
      once the scroll limit has been reached.
      */
-    private var extendsPanScrolling = true
+    private var extendsPanScrolling: Bool {
+        return scrollView != nil && (presentable?.allowsExtendedPanScrolling ?? false)
+    }
+
+    /**
+     The scroll view bound to the current interaction. Its observer and saved
+     offset are replaced together at touch admission or an explicit layout update.
+     */
+    private weak var scrollView: UIScrollView?
 
     /**
      A flag to determine if scrolling should be limited to the longFormHeight.
@@ -242,6 +250,9 @@ open class PanModalPresentationController: UIPresentationController {
  
      override public func dismissalTransitionDidEnd(_ completed: Bool) {
         if !completed { return }
+        scrollObserver?.invalidate()
+        scrollObserver = nil
+        scrollView = nil
         
         presentable?.panModalDidDismiss()
      }
@@ -302,9 +313,6 @@ public extension PanModalPresentationController {
      */
     func performUpdates(_ updates: () -> Void) {
 
-        guard let scrollView = presentable?.panScrollable
-            else { return }
-
         // Pause scroll observer
         scrollObserver?.invalidate()
         scrollObserver = nil
@@ -312,9 +320,10 @@ public extension PanModalPresentationController {
         // Perform updates
         updates()
 
-        // Resume scroll observer
-        trackScrolling(scrollView)
-        observe(scrollView: scrollView)
+        // Updates may replace the selected view. Resume through the binding owner.
+        scrollObserver?.invalidate()
+        scrollObserver = nil
+        updateScrollView()
     }
 
     /**
@@ -325,10 +334,11 @@ public extension PanModalPresentationController {
      pan modal presentable value changes after the initial presentation
      */
     func setNeedsLayoutUpdate() {
+        scrollObserver?.invalidate()
+        scrollObserver = nil
         configureViewLayout()
         adjustPresentedViewFrame()
-        observe(scrollView: presentable?.panScrollable)
-        configureScrollViewInsets()
+        updateScrollView()
     }
 
 }
@@ -414,7 +424,7 @@ private extension PanModalPresentationController {
      */
     func adjustPanContainerBackgroundColor() {
         panContainerView.backgroundColor = presentedViewController.view.backgroundColor
-            ?? presentable?.panScrollable?.backgroundColor
+            ?? scrollView?.backgroundColor
     }
 
     /**
@@ -455,7 +465,6 @@ private extension PanModalPresentationController {
         bottomYPos = layoutPresentable.bottomYPos
         longFormYPosition = layoutPresentable.longFormYPos
         anchorModalToLongForm = layoutPresentable.anchorModalToLongForm
-        extendsPanScrolling = layoutPresentable.allowsExtendedPanScrolling
 
         containerView?.isUserInteractionEnabled = layoutPresentable.isUserInteractionEnabled
     }
@@ -465,9 +474,7 @@ private extension PanModalPresentationController {
      */
     func configureScrollViewInsets() {
 
-        guard
-            let scrollView = presentable?.panScrollable,
-            !scrollView.isScrolling
+        guard let scrollView = scrollView
             else { return }
 
         /**
@@ -634,21 +641,24 @@ private extension PanModalPresentationController {
          for the purpose of ensuring we're no longer tracking the scrollView
          */
         guard !shouldPrioritize(panGestureRecognizer: panGestureRecognizer) else {
-            presentable?.panScrollable?.panGestureRecognizer.isEnabled = false
-            presentable?.panScrollable?.panGestureRecognizer.isEnabled = true
+            if let scrollView = scrollView, scrollView.isScrollEnabled,
+               scrollView.panGestureRecognizer.isEnabled {
+                scrollView.panGestureRecognizer.isEnabled = false
+                scrollView.panGestureRecognizer.isEnabled = true
+            }
             return false
         }
 
         guard
             isPresentedViewAnchored,
-            let scrollView = presentable?.panScrollable,
-            scrollView.contentOffset.y > 0
+            let scrollView = scrollView,
+            scrollView.contentOffset.y > -scrollView.adjustedContentInset.top
             else {
                 return false
         }
 
-        let loc = panGestureRecognizer.location(in: presentedView)
-        return ((scrollView.frame.contains(loc) && !(presentable?.shouldPrioritize(panModalGestureRecognizer: panGestureRecognizer) ?? false)) || scrollView.isScrolling)
+        let loc = panGestureRecognizer.location(in: scrollView)
+        return ((scrollView.bounds.contains(loc) && !(presentable?.shouldPrioritize(panModalGestureRecognizer: panGestureRecognizer) ?? false)) || scrollView.isScrolling)
     }
 
     /**
@@ -740,20 +750,49 @@ private extension PanModalPresentationController {
 private extension PanModalPresentationController {
 
     /**
+     Reconcile selection before arbitration. Configure the new view before
+     observing it so inset changes cannot enter a half-initialized binding.
+     */
+    func updateScrollView() {
+        let selected = (presentable?.panScrollable).flatMap {
+            $0.isScrollEnabled && $0.panGestureRecognizer.isEnabled &&
+                $0.isDescendant(of: presentedViewController.view) ? $0 : nil
+        }
+        let selectionChanged = selected !== scrollView
+        if selectionChanged || scrollObserver == nil {
+            scrollObserver?.invalidate()
+            scrollObserver = nil
+            scrollView = selected
+            if selectionChanged || scrollView?.isScrolling != true {
+                configureScrollViewInsets()
+            }
+            if let scrollView = scrollView {
+                trackScrolling(scrollView)
+                observe(scrollView: scrollView)
+            }
+        }
+    }
+
+    /**
      Creates & stores an observer on the given scroll view's content offset.
      This allows us to track scrolling without overriding the scrollView delegate
      */
-    func observe(scrollView: UIScrollView?) {
+    func observe(scrollView: UIScrollView) {
         scrollObserver?.invalidate()
-        scrollObserver = scrollView?.observe(\.contentOffset, options: .old) { [weak self] scrollView, change in
+        scrollObserver = scrollView.observe(\.contentOffset, options: .old) { [weak self] scrollView, change in
 
             /**
              Incase we have a situation where we have two containerViews in the same presentation
              */
-            guard self?.containerView != nil
-                else { return }
-
-            self?.didPanOnScrollView(scrollView, change: change)
+            guard let self = self, self.containerView != nil,
+                  scrollView === self.scrollView else { return }
+            guard scrollView.isDescendant(of: self.presentedViewController.view) else {
+                self.scrollObserver?.invalidate()
+                self.scrollObserver = nil
+                self.scrollView = nil
+                return
+            }
+            self.didPanOnScrollView(scrollView, change: change)
         }
     }
 
@@ -773,7 +812,7 @@ private extension PanModalPresentationController {
             !presentedViewController.isBeingPresented
             else { return }
 
-        if !isPresentedViewAnchored && scrollView.contentOffset.y > 0 {
+        if !isPresentedViewAnchored && scrollView.contentOffset.y > -scrollView.adjustedContentInset.top {
 
             /**
              Hold the scrollView in place if we're actively scrolling and not handling top bounce
@@ -796,7 +835,7 @@ private extension PanModalPresentationController {
             }
 
         } else if presentedViewController.view.isKind(of: UIScrollView.self)
-            && !isPresentedViewAnimating && scrollView.contentOffset.y <= 0 {
+            && !isPresentedViewAnimating && scrollView.contentOffset.y <= -scrollView.adjustedContentInset.top {
 
             /**
              In the case where we drag down quickly on the scroll view and let go,
@@ -812,7 +851,7 @@ private extension PanModalPresentationController {
      Halts the scroll of a given scroll view & anchors it at the `scrollViewYOffset`
      */
     func haltScrolling(_ scrollView: UIScrollView) {
-        scrollView.setContentOffset(CGPoint(x: 0, y: scrollViewYOffset), animated: false)
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: scrollViewYOffset), animated: false)
         scrollView.showsVerticalScrollIndicator = false
     }
 
@@ -821,8 +860,8 @@ private extension PanModalPresentationController {
      This helps halt scrolling when we want to hold the scroll view in place.
      */
     func trackScrolling(_ scrollView: UIScrollView) {
-        scrollViewYOffset = max(scrollView.contentOffset.y, 0)
-        if (scrollView.contentOffset.y > 0) {
+        scrollViewYOffset = max(scrollView.contentOffset.y, -scrollView.adjustedContentInset.top)
+        if (scrollView.contentOffset.y > -scrollView.adjustedContentInset.top) {
             scrollView.showsVerticalScrollIndicator = true
         }
     }
@@ -842,7 +881,7 @@ private extension PanModalPresentationController {
         guard let oldYValue = change.oldValue?.y, scrollView.isDecelerating
             else { return }
 
-        let yOffset = scrollView.contentOffset.y
+        let yOffset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
         let presentedSize = containerView?.frame.size ?? .zero
 
         /**
@@ -851,7 +890,7 @@ private extension PanModalPresentationController {
          */
         presentedView.bounds.size = CGSize(width: presentedSize.width, height: presentedSize.height + yOffset)
 
-        if oldYValue > yOffset {
+        if oldYValue > scrollView.contentOffset.y {
             /**
              Move the view in the opposite direction to the decreasing bounds
              until half way through the deceleration so that it appears
@@ -860,7 +899,7 @@ private extension PanModalPresentationController {
             presentedView.frame.origin.y = longFormYPosition - yOffset
             self.yPosition = presentedView.frame.origin.y
         } else {
-            scrollViewYOffset = 0
+            scrollViewYOffset = -scrollView.adjustedContentInset.top
             snap(toYPosition: longFormYPosition)
         }
 
@@ -871,6 +910,16 @@ private extension PanModalPresentationController {
 // MARK: - UIGestureRecognizerDelegate
 
 extension PanModalPresentationController: UIGestureRecognizerDelegate {
+
+    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if gestureRecognizer === panGestureRecognizer,
+           gestureRecognizer.state == .possible, gestureRecognizer.numberOfTouches == 0 {
+            presentable?.willReceivePanTouch(touch)
+            updateScrollView()
+        }
+        return true
+    }
+
 
     /**
      Do not require any other gesture recognizers to fail
@@ -884,7 +933,7 @@ extension PanModalPresentationController: UIGestureRecognizerDelegate {
      is the pan scrollable view
      */
     public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        return otherGestureRecognizer.view == presentable?.panScrollable
+        return otherGestureRecognizer.view == scrollView
     }
 }
 
