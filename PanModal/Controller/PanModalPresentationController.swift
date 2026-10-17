@@ -25,8 +25,7 @@ public class UIPanGestureRecognizerWithInitialPosition: UIPanGestureRecognizer {
  It controls the coordination between the individual transition classes as well as
  provides an abstraction over how the presented view is presented & displayed.
 
- For example, we add a drag indicator view above the presented view and
- a background overlay between the presenting & presented view.
+ A background overlay sits between the presenting and presented views.
 
  The presented view's layout configuration & presentation is defined using the PanModalPresentable.
 
@@ -48,17 +47,49 @@ open class PanModalPresentationController: UIPresentationController {
      Constants
      */
     struct Constants {
-        static let indicatorYOffset = CGFloat(8.0)
         static let snapMovementSensitivity = CGFloat(0.7)
-        static let dragIndicatorSize = CGSize(width: 36.0, height: 5.0)
     }
 
     // MARK: - Properties
 
-    /**
-     A flag to track if the presented view is animating
-     */
-    private var isPresentedViewAnimating = false
+    private struct Animation {
+        let destination: PresentationState
+        let animator: UIViewPropertyAnimator
+        let completion: ((Bool) -> Void)?
+    }
+
+    private var animation: Animation?
+    private var panMinimumY: CGFloat?
+    private var endPanFrameRateRequest: (() -> Void)?
+    private var isPresentedViewAnimating: Bool { animation != nil }
+
+    // An accepted dismissal outlives its spring and may precede UIKit's transition.
+    private final class Dismissal {
+        enum Origin { case panModal, uiKit }
+        let origin: Origin
+        var returnState: PresentationState
+        var requested = true
+        var velocity: CGFloat
+        var animated: Bool
+        var completions: [() -> Void] = []
+        // Keep teardown cancelable after the spring ends while a child still exits.
+        var contextCompletion: ((Bool) -> Void)?
+
+        init(returnState: PresentationState, velocity: CGFloat, animated: Bool = true, origin: Origin = .uiKit) {
+            self.origin = origin
+            self.returnState = returnState
+            self.velocity = velocity
+            self.animated = animated
+        }
+    }
+
+    private var dismissal: Dismissal?
+    // The form to preserve if UIKit dismissal is canceled, including retained hiding.
+    private var presentationState: PresentationState = .shortForm
+
+    private var hiddenYPosition: CGFloat {
+        return containerView?.bounds.height ?? presentedView.frame.maxY
+    }
 
     /**
      A flag to determine if scrolling should seamlessly transition
@@ -135,7 +166,7 @@ open class PanModalPresentationController: UIPresentationController {
         }
         view.didTap = { [weak self] _ in
             if self?.presentable?.allowsTapToDismiss == true {
-                self?.dismissPresentedViewController()
+                self?.dismiss()
             }
         }
         return view
@@ -162,16 +193,6 @@ open class PanModalPresentationController: UIPresentationController {
     }
   
     /**
-     Drag Indicator View
-     */
-    private lazy var dragIndicatorView: UIView = {
-        let view = UIView()
-        view.backgroundColor = presentable?.dragIndicatorBackgroundColor
-        view.layer.cornerRadius = Constants.dragIndicatorSize.height / 2.0
-        return view
-    }()
-
-    /**
      Override presented view to return the pan container wrapper
      */
     public override var presentedView: UIView {
@@ -194,6 +215,7 @@ open class PanModalPresentationController: UIPresentationController {
     // MARK: - Deinitializers
 
     deinit {
+        setPanFrameRateActive(false)
         scrollObserver?.invalidate()
     }
 
@@ -201,7 +223,11 @@ open class PanModalPresentationController: UIPresentationController {
 
     override public func containerViewWillLayoutSubviews() {
         super.containerViewWillLayoutSubviews()
-        configureViewLayout()
+        if let containerView = containerView, presentedView.bounds.size != containerView.bounds.size {
+            setNeedsLayoutUpdate()
+        } else {
+            configureViewLayout()
+        }
     }
 
     override public func presentationTransitionWillBegin() {
@@ -214,30 +240,23 @@ open class PanModalPresentationController: UIPresentationController {
         configureScrollViewInsets()
 
         guard let coordinator = presentedViewController.transitionCoordinator else {
-            backgroundView.dimState = .max
+            backgroundView.layer.opacity = 1
             return
         }
 
         coordinator.animate(alongsideTransition: { [weak self] _ in
-            self?.backgroundView.dimState = .max
             self?.presentedViewController.setNeedsStatusBarAppearanceUpdate()
         })
     }
 
     override public func dismissalTransitionWillBegin() {
-
-        guard let coordinator = presentedViewController.transitionCoordinator else {
-            backgroundView.dimState = .off
-            return
+        if dismissal == nil {
+            let operation = Dismissal(returnState: presentationState, velocity: 0)
+            dismissal = operation
+            if operation.requested { presentable?.panModalWillDismiss() }
         }
-
-        /**
-         Drag indicator is drawn outside of view bounds
-         so hiding it on view dismiss means avoiding visual bugs
-         */
-        coordinator.animate(alongsideTransition: { [weak self] _ in
-            self?.dragIndicatorView.alpha = 0.0
-            self?.backgroundView.dimState = .off
+        if dismissal?.requested == true { setPanFrameRateActive(false) }
+        presentedViewController.transitionCoordinator?.animate(alongsideTransition: { [weak self] _ in
             self?.presentingViewController.setNeedsStatusBarAppearanceUpdate()
         })
     }
@@ -248,14 +267,24 @@ open class PanModalPresentationController: UIPresentationController {
         backgroundView.removeFromSuperview()
     }
  
-     override public func dismissalTransitionDidEnd(_ completed: Bool) {
-        if !completed { return }
+    override public func dismissalTransitionDidEnd(_ completed: Bool) {
+        if let operation = dismissal, operation.origin == .uiKit {
+            if let coordinator = presentedViewController.transitionCoordinator,
+               !coordinator.isAnimated,
+               coordinator.viewController(forKey: .from) === presentedViewController {
+                coordinator.animate(alongsideTransition: nil) { [self] _ in completeDismissal(operation) }
+            }
+        }
+        guard completed else {
+            backgroundView.passthroughView = nil
+            return
+        }
+        captureAnimation()?.completion?(false)
         scrollObserver?.invalidate()
         scrollObserver = nil
         scrollView = nil
-        
         presentable?.panModalDidDismiss()
-     }
+    }
 
     /**
      Update presented view size in response to size class changes
@@ -264,15 +293,8 @@ open class PanModalPresentationController: UIPresentationController {
         super.viewWillTransition(to: size, with: coordinator)
 
         coordinator.animate(alongsideTransition: { [weak self] _ in
-            guard
-                let self = self,
-                let presentable = self.presentable
-                else { return }
-
-            self.adjustPresentedViewFrame()
-            if presentable.shouldRoundTopCorners {
-                self.addRoundedCorners(to: self.presentedView)
-            }
+            guard let self = self else { return }
+            self.setNeedsLayoutUpdate()
         })
     }
 
@@ -287,20 +309,13 @@ public extension PanModalPresentationController {
      to the given presentation state
      */
     func transition(to state: PresentationState) {
+        transition(to: state, velocity: 0)
+    }
 
-        guard presentable?.shouldTransition(to: state) == true
-            else { return }
-
-        presentable?.willTransition(to: state)
-
-        switch state {
-        case .shortForm:
-            snap(toYPosition: shortFormYPosition)
-        case .longForm:
-            snap(toYPosition: longFormYPosition)
-        case .hidden:
-          snap(toYPosition: (presentedView.frame.height + shortFormYPosition))
-         }
+    /// Dismisses the sheet. Completion follows UIKit transition settlement,
+    /// including cancellation when the user grabs the exiting sheet.
+    func dismiss(animated: Bool = true, completion: (() -> Void)? = nil) {
+        dismiss(animated: animated, velocity: 0, completion: completion)
     }
 
     /**
@@ -334,11 +349,16 @@ public extension PanModalPresentationController {
      pan modal presentable value changes after the initial presentation
      */
     func setNeedsLayoutUpdate() {
+        let activeAnimation = captureAnimation()
         scrollObserver?.invalidate()
         scrollObserver = nil
         configureViewLayout()
         adjustPresentedViewFrame()
+        configureCorners()
         updateScrollView()
+        if let activeAnimation = activeAnimation {
+            animate(to: activeAnimation.destination, completion: activeAnimation.completion)
+        }
     }
 
 }
@@ -351,18 +371,16 @@ private extension PanModalPresentationController {
      Boolean flag to determine if the presented view is anchored
      */
     var isPresentedViewAnchored: Bool {
-        if !isPresentedViewAnimating
-            && extendsPanScrolling
-            && presentedView.frame.minY.rounded() <= anchoredYPosition.rounded() {
-            return true
-        }
-
-        return false
+        guard extendsPanScrolling else { return false }
+        let y = isPresentedViewAnimating
+            ? presentedView.layer.presentation()?.frame.minY ?? presentedView.frame.minY
+            : presentedView.frame.minY
+        return y.rounded() <= anchoredYPosition.rounded()
     }
 
     /**
      Adds the presented view to the given container view
-     & configures the view elements such as drag indicator, rounded corners
+     & configures the view elements such as rounded corners
      based on the pan modal presentable.
      */
     func layoutPresentedView(in containerView: UIView) {
@@ -371,8 +389,7 @@ private extension PanModalPresentationController {
          If the presented view controller does not conform to pan modal presentable
          don't configure
          */
-        guard let presentable = presentable
-            else { return }
+        guard presentable != nil else { return }
 
         /**
          ⚠️ If this class is NOT used in conjunction with the PanModalPresentationAnimator
@@ -382,13 +399,7 @@ private extension PanModalPresentationController {
         containerView.addSubview(presentedView)
         containerView.addGestureRecognizer(panGestureRecognizer)
 
-        if presentable.showDragIndicator {
-            addDragIndicatorView(to: presentedView)
-        }
-
-        if presentable.shouldRoundTopCorners {
-            addRoundedCorners(to: presentedView)
-        }
+        configureCorners()
 
         setNeedsLayoutUpdate()
         adjustPanContainerBackgroundColor()
@@ -441,19 +452,6 @@ private extension PanModalPresentationController {
     }
 
     /**
-     Adds the drag indicator view to the view hierarchy
-     & configures its layout constraints.
-     */
-    func addDragIndicatorView(to view: UIView) {
-        view.addSubview(dragIndicatorView)
-        dragIndicatorView.translatesAutoresizingMaskIntoConstraints = false
-        dragIndicatorView.bottomAnchor.constraint(equalTo: view.topAnchor, constant: -Constants.indicatorYOffset).isActive = true
-        dragIndicatorView.centerXAnchor.constraint(equalTo: view.centerXAnchor).isActive = true
-        dragIndicatorView.widthAnchor.constraint(equalToConstant: Constants.dragIndicatorSize.width).isActive = true
-        dragIndicatorView.heightAnchor.constraint(equalToConstant: Constants.dragIndicatorSize.height).isActive = true
-    }
-
-    /**
      Calculates & stores the layout anchor points & options
      */
     func configureViewLayout() {
@@ -495,9 +493,7 @@ private extension PanModalPresentationController {
          As we adjust the bounds during `handleScrollViewTopBounce`
          we should assume that contentInsetAdjustmentBehavior will not be correct
          */
-        if #available(iOS 11.0, *) {
-            scrollView.contentInsetAdjustmentBehavior = .never
-        }
+        scrollView.contentInsetAdjustmentBehavior = .never
     }
 
 }
@@ -510,38 +506,67 @@ private extension PanModalPresentationController {
      The designated function for handling pan gesture events
      */
     @objc func didPanOnPresentedView(_ recognizer: UIPanGestureRecognizer) {
+        defer {
+            if recognizer.state == .ended || recognizer.state == .cancelled || recognizer.state == .failed {
+                setPanFrameRateActive(false)
+                panMinimumY = nil
+            }
+        }
 
         guard
             shouldRespond(to: recognizer),
             let containerView = containerView
             else {
+                setPanFrameRateActive(false)
                 recognizer.setTranslation(.zero, in: recognizer.view)
                 return
         }
 
         switch recognizer.state {
         case .began, .changed:
+            setPanFrameRateActive(true)
+            let wasDismissing = dismissal?.requested ?? presentedViewController.isBeingDismissed
+            if wasDismissing || recognizer.state == .began { cancelDismissal() }
+            if let interrupted = captureAnimation() {
+                interrupted.completion?(false)
+                recognizer.setTranslation(.zero, in: containerView)
+                panMinimumY = min(anchoredYPosition, presentedView.frame.minY)
+            }
+            if wasDismissing {
+                recognizer.setTranslation(.zero, in: containerView)
+                panMinimumY = min(anchoredYPosition, presentedView.frame.minY)
+            }
+            if panMinimumY == nil { panMinimumY = min(anchoredYPosition, presentedView.frame.minY) }
+            backgroundView.passthroughView = nil
 
             /**
              Respond accordingly to pan gesture translation
              */
-            respond(to: recognizer)
+            presentable?.willRespond(to: recognizer)
+            applyTranslation(of: recognizer)
 
             /**
              If presentedView is translated above the longForm threshold, treat as transition
              */
             if presentedView.frame.origin.y == anchoredYPosition && extendsPanScrolling {
+                presentationState = .longForm
                 presentable?.willTransition(to: .longForm)
             }
 
-        default:
+        case .ended:
+            if let interrupted = captureAnimation() {
+                interrupted.completion?(false)
+                recognizer.setTranslation(.zero, in: containerView)
+                panMinimumY = min(anchoredYPosition, presentedView.frame.minY)
+            }
+            applyTranslation(of: recognizer)
 
             /**
              Use velocity sensitivity value to restrict snapping
              */
-            let velocity = recognizer.velocity(in: presentedView)
+            let velocity = releaseVelocity(for: recognizer)
 
-            if isVelocityWithinSensitivityRange(velocity.y) {
+            if isVelocityWithinSensitivityRange(velocity) {
 
                 /**
                  If velocity is within the sensitivity range,
@@ -550,15 +575,15 @@ private extension PanModalPresentationController {
                  This allows the user to dismiss directly from long form
                  instead of going to the short form state first.
                  */
-                if velocity.y < 0 {
-                    transition(to: presentable?.longFormEnabled ?? true ? .longForm : .shortForm)
+                if velocity < 0 {
+                    transition(to: presentable?.longFormEnabled ?? true ? .longForm : .shortForm, velocity: velocity)
 
                 } else if (nearest(to: presentedView.frame.minY, inValues: [longFormYPosition, containerView.bounds.height]) == longFormYPosition
                     && presentedView.frame.minY < shortFormYPosition) || presentable?.allowsDragToDismiss == false {
-                    transition(to: .shortForm)
+                    transition(to: .shortForm, velocity: velocity)
 
                 } else {
-                    dismissPresentedViewController()
+                    dismiss(velocity: velocity)
                 }
 
             } else {
@@ -570,15 +595,21 @@ private extension PanModalPresentationController {
                 let position = nearest(to: presentedView.frame.minY, inValues: [containerView.bounds.height, shortFormYPosition, longFormYPosition])
 
                 if position == longFormYPosition {
-                  transition(to: presentable?.longFormEnabled ?? true ? .longForm : .shortForm)
+                  transition(to: presentable?.longFormEnabled ?? true ? .longForm : .shortForm, velocity: velocity)
 
                 } else if position == shortFormYPosition || presentable?.allowsDragToDismiss == false {
-                    transition(to: .shortForm)
+                    transition(to: .shortForm, velocity: velocity)
 
                 } else {
-                    dismissPresentedViewController()
+                    dismiss(velocity: velocity)
                 }
             }
+        case .cancelled, .failed:
+            captureAnimation()?.completion?(false)
+            let target = nearest(to: presentedView.frame.minY, inValues: [shortFormYPosition, longFormYPosition])
+            transition(to: target == longFormYPosition && presentable?.longFormEnabled != false ? .longForm : .shortForm, velocity: 0)
+        default:
+            break
         }
     }
 
@@ -591,9 +622,12 @@ private extension PanModalPresentationController {
      ⚠️ This is the only time we should be cancelling the pan modal gesture recognizer
      */
     func shouldRespond(to panGestureRecognizer: UIPanGestureRecognizer) -> Bool {
+        let permitted = presentable?.shouldRespond(to: panGestureRecognizer) == true
+        guard dismissal == nil || permitted else { return false }
+        guard !presentedViewController.isBeingDismissed ||
+                (presentedViewController.transitionCoordinator?.isInteractive == true && permitted) else { return false }
         guard
-            presentable?.shouldRespond(to: panGestureRecognizer) == true ||
-                !(panGestureRecognizer.state == .began || panGestureRecognizer.state == .cancelled)
+            permitted || !(panGestureRecognizer.state == .began || panGestureRecognizer.state == .cancelled)
             else {
                 panGestureRecognizer.isEnabled = false
                 panGestureRecognizer.isEnabled = true
@@ -605,19 +639,15 @@ private extension PanModalPresentationController {
     /**
      Communicate intentions to presentable and adjust subviews in containerView
      */
-    func respond(to panGestureRecognizer: UIPanGestureRecognizer) {
-        presentable?.willRespond(to: panGestureRecognizer)
-
-        var yDisplacement = panGestureRecognizer.translation(in: presentedView).y
-
-        /**
-         If the presentedView is not anchored to long form, reduce the rate of movement
-         above the threshold
-         */
-        if presentedView.frame.origin.y < longFormYPosition {
-            yDisplacement /= 2.0
-        }
-        adjust(toYPosition: presentedView.frame.origin.y + yDisplacement)
+    func applyTranslation(of panGestureRecognizer: UIPanGestureRecognizer) {
+        let y = presentedView.frame.minY
+        let translation = panGestureRecognizer.translation(in: containerView).y
+        // Invert resistance before applying input so crossing long form does not
+        // depend on how UIKit partitions movement into callbacks.
+        let unresistedY = y < longFormYPosition ? longFormYPosition + 2 * (y - longFormYPosition) : y
+        let proposedY = unresistedY + translation
+        let nextY = proposedY < longFormYPosition ? longFormYPosition + (proposedY - longFormYPosition) / 2 : proposedY
+        adjust(toYPosition: max(nextY, panMinimumY ?? anchoredYPosition))
 
         panGestureRecognizer.setTranslation(.zero, in: presentedView)
     }
@@ -677,13 +707,113 @@ private extension PanModalPresentationController {
         return (abs(velocity) - (1000 * (1 - Constants.snapMovementSensitivity))) > 0
     }
 
-    func snap(toYPosition yPos: CGFloat) {
-        PanModalAnimator.animate({ [weak self] in
-            self?.adjust(toYPosition: yPos)
-            self?.isPresentedViewAnimating = true
-        }, config: presentable) { [weak self] didComplete in
-            self?.isPresentedViewAnimating = !didComplete
+    func transition(to state: PresentationState, velocity: CGFloat) {
+        guard presentable?.shouldTransition(to: state) == true else { return }
+        if presentedViewController.isBeingDismissed {
+            guard state != .hidden, presentedViewController.transitionCoordinator?.isInteractive == true else { return }
         }
+        if state != .hidden { cancelDismissal() }
+        presentationState = state
+        presentable?.willTransition(to: state)
+        if state == .hidden { backgroundView.passthroughView = interactionView(for: presentingViewController) }
+        animate(to: state, velocity: velocity)
+    }
+
+    func position(for state: PresentationState) -> CGFloat {
+        switch state {
+        case .shortForm: return shortFormYPosition
+        case .longForm: return longFormYPosition
+        case .hidden: return hiddenYPosition
+        }
+    }
+
+    func releaseVelocity(for recognizer: UIPanGestureRecognizer) -> CGFloat {
+        let velocity = recognizer.velocity(in: containerView).y
+        let y = presentedView.frame.minY
+        if y <= anchoredYPosition && velocity < 0 { return 0 }
+        return y < longFormYPosition || (y == longFormYPosition && velocity < 0) ? velocity / 2 : velocity
+    }
+
+    func dismiss(animated: Bool = true, velocity: CGFloat, completion: (() -> Void)? = nil) {
+        guard let presenter = presentedViewController.presentingViewController else {
+            if let operation = dismissal { completeDismissal(operation) }
+            completion?()
+            return
+        }
+        if let operation = dismissal {
+            if let completion = completion { operation.completions.append(completion) }
+            if !operation.requested {
+                operation.requested = true
+                operation.velocity = velocity
+                operation.animated = animated
+                operation.returnState = presentationState
+                startDismissalAnimation(operation, to: presenter)
+                presentable?.panModalWillDismiss()
+            }
+            return
+        }
+        let operation = Dismissal(returnState: presentationState, velocity: velocity, animated: animated, origin: .panModal)
+        if let completion = completion { operation.completions.append(completion) }
+        dismissal = operation
+        startDismissalAnimation(operation, to: presenter)
+        presentable?.panModalWillDismiss()
+        submitDismissal(operation)
+    }
+
+    private func submitDismissal(_ operation: Dismissal) {
+        guard dismissal === operation else { return }
+        guard operation.requested,
+              let presenter = presentedViewController.presentingViewController else {
+            completeDismissal(operation)
+            return
+        }
+        var descendant = presentedViewController.presentedViewController
+        while let controller = descendant {
+            descendant = controller.presentedViewController
+            guard let owner = controller.presentationController as? PanModalPresentationController else { continue }
+            if owner.dismissal == nil, controller.isBeingDismissed {
+                owner.dismissal = Dismissal(returnState: owner.presentationState, velocity: 0)
+                owner.presentable?.panModalWillDismiss()
+            }
+            guard let childOperation = owner.dismissal else { continue }
+            childOperation.completions.append { [self] in submitDismissal(operation) }
+            return
+        }
+        presenter.dismiss(animated: operation.animated) { [self] in completeDismissal(operation) }
+    }
+
+    private func completeDismissal(_ operation: Dismissal) {
+        guard dismissal === operation else { return }
+        dismissal = nil
+        let completions = operation.completions
+        operation.completions.removeAll()
+        completions.forEach { $0() }
+    }
+
+    private func cancelDismissal() {
+        if dismissal == nil, presentedViewController.isBeingDismissed,
+           presentedViewController.transitionCoordinator?.isInteractive == true {
+            let operation = Dismissal(returnState: presentationState, velocity: 0)
+            dismissal = operation
+        }
+        let interrupted: Animation?
+        if let operation = dismissal, operation.requested {
+            operation.requested = false
+            interrupted = captureAnimation()
+        } else {
+            interrupted = nil
+        }
+        var ancestor: UIViewController? = presentedViewController.presentingViewController
+        while let controller = ancestor {
+            ancestor = controller.presentingViewController
+            guard let owner = controller.presentationController as? PanModalPresentationController else { continue }
+            guard owner.dismissal?.requested ?? controller.isBeingDismissed else { continue }
+            let returnState = owner.dismissal?.returnState ?? owner.presentationState
+            owner.cancelDismissal()
+            owner.animate(to: returnState)
+        }
+        interrupted?.completion?(false)
+        if let operation = dismissal { completeDismissalContext(operation, completed: false) }
     }
 
     /**
@@ -696,23 +826,12 @@ private extension PanModalPresentationController {
       if yPos == anchoredYPosition && presentedView.frame.origin.y >= anchoredYPosition {
         presentable?.onTouchTop(false)
       }
-        presentedView.frame.origin.y = max(yPos, anchoredYPosition)
-        self.yPosition = presentedView.frame.origin.y
-        
-        guard presentedView.frame.origin.y > shortFormYPosition else {
-            backgroundView.dimState = .max
-            return
-        }
-
-        let yDisplacementFromShortForm = presentedView.frame.origin.y - shortFormYPosition
-      
-
-
-        /**
-         Once presentedView is translated below shortForm, calculate yPos relative to bottom of screen
-         and apply percentage to backgroundView alpha
-         */
-        backgroundView.dimState = .percent(1.0 - (yDisplacementFromShortForm / presentedView.frame.height))
+        presentedView.frame.origin.y = yPos
+        yPosition = yPos
+        let distance = hiddenYPosition - shortFormYPosition
+        // Keep position and opacity affine through the native spring.
+        // Core Animation clamps the rendered opacity, including overshoot.
+        backgroundView.layer.opacity = distance > 0 ? Float((hiddenYPosition - yPos) / distance) : 0
     }
 
     /**
@@ -728,21 +847,7 @@ private extension PanModalPresentationController {
         return nearestVal
     }
 
-    /**
-     Dismiss presented view
-     */
-    func dismissPresentedViewController() {
-        presentable?.panModalWillDismiss()
-        presentable?.hide()
-      let deadlineTime = DispatchTime.now() + (presentable?.transitionDuration ?? 0)
-      
-        DispatchQueue.main.asyncAfter(deadline: deadlineTime) {
-          self.presentable?.unhackParent()
-          self.presentedViewController.dismiss(animated: false) { [weak self] in
-              self?.presentable?.panModalDidDismiss()
-          }
-        }
-    }
+
 }
 
 // MARK: - UIScrollView Observer
@@ -900,7 +1005,7 @@ private extension PanModalPresentationController {
             self.yPosition = presentedView.frame.origin.y
         } else {
             scrollViewYOffset = -scrollView.adjustedContentInset.top
-            snap(toYPosition: longFormYPosition)
+            animate(to: .longForm)
         }
 
         scrollView.showsVerticalScrollIndicator = false
@@ -910,6 +1015,13 @@ private extension PanModalPresentationController {
 // MARK: - UIGestureRecognizerDelegate
 
 extension PanModalPresentationController: UIGestureRecognizerDelegate {
+
+    public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === panGestureRecognizer else { return true }
+        let velocity = panGestureRecognizer.velocity(in: containerView)
+        return abs(velocity.y) > abs(velocity.x)
+    }
+
 
     public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         if gestureRecognizer === panGestureRecognizer,
@@ -937,49 +1049,142 @@ extension PanModalPresentationController: UIGestureRecognizerDelegate {
     }
 }
 
-// MARK: - UIBezierPath
+// MARK: - Motion and Rendering
 
-private extension PanModalPresentationController {
+extension PanModalPresentationController {
 
-    /**
-     Draws top rounded corners on a given view
-     We have to set a custom path for corner rounding
-     because we render the dragIndicator outside of view bounds
-     */
-    func addRoundedCorners(to view: UIView) {
-        let radius = presentable?.cornerRadius ?? 0
-        let path = UIBezierPath(roundedRect: view.bounds,
-                                byRoundingCorners: [.topLeft, .topRight],
-                                cornerRadii: CGSize(width: radius, height: radius))
-
-        // Draw around the drag indicator view, if displayed
-        if presentable?.showDragIndicator == true {
-            let indicatorLeftEdgeXPos = view.bounds.width/2.0 - Constants.dragIndicatorSize.width/2.0
-            drawAroundDragIndicator(currentPath: path, indicatorLeftEdgeXPos: indicatorLeftEdgeXPos)
+    private func setPanFrameRateActive(_ active: Bool) {
+        guard active else {
+            let endRequest = endPanFrameRateRequest
+            endPanFrameRateRequest = nil
+            endRequest?()
+            return
         }
+        guard endPanFrameRateRequest == nil else { return }
 
-        // Set path as a mask to display optional drag indicator view & rounded corners
-        let mask = CAShapeLayer()
-        mask.path = path.cgPath
-        view.layer.mask = mask
+        if #available(iOS 18.0, *), let screen = presentedView.window?.screen {
+            let maximum = Float(screen.maximumFramesPerSecond)
+            guard maximum > 60 else { return }
 
-        // Improve performance by rasterizing the layer
-        view.layer.shouldRasterize = true
-        view.layer.rasterizationScale = UIScreen.main.scale
+            // Express tracking intent without scheduling frames or adding a renderer.
+            let updateLink = UIUpdateLink(view: presentedView)
+            updateLink.preferredFrameRateRange = CAFrameRateRange(
+                minimum: min(80, maximum), maximum: maximum, preferred: maximum
+            )
+            endPanFrameRateRequest = { updateLink.isEnabled = false }
+            updateLink.isEnabled = true
+        }
     }
 
-    /**
-     Draws a path around the drag indicator view
-     */
-    func drawAroundDragIndicator(currentPath path: UIBezierPath, indicatorLeftEdgeXPos: CGFloat) {
+    func animatePresentation(from y: CGFloat, completion: @escaping (Bool) -> Void) {
+        captureAnimation()?.completion?(false)
+        UIView.performWithoutAnimation {
+            presentedView.frame.origin.y = y
+            yPosition = y
+            backgroundView.layer.opacity = 0
+        }
+        animate(to: .shortForm, completion: completion)
+    }
 
-        let totalIndicatorOffset = Constants.indicatorYOffset + Constants.dragIndicatorSize.height
+    private func interactionView(for controller: UIViewController) -> UIView? {
+        return (controller.presentationController as? PanModalPresentationController)?.containerView
+            ?? controller.viewIfLoaded
+    }
 
-        // Draw around drag indicator starting from the left
-        path.addLine(to: CGPoint(x: indicatorLeftEdgeXPos, y: path.currentPoint.y))
-        path.addLine(to: CGPoint(x: path.currentPoint.x, y: path.currentPoint.y - totalIndicatorOffset))
-        path.addLine(to: CGPoint(x: path.currentPoint.x + Constants.dragIndicatorSize.width, y: path.currentPoint.y))
-        path.addLine(to: CGPoint(x: path.currentPoint.x, y: path.currentPoint.y + totalIndicatorOffset))
+    func animateDismissal(to presenter: UIViewController, completion: @escaping (Bool) -> Void) {
+        guard let operation = dismissal else { completion(false); return }
+        operation.contextCompletion = completion
+        guard operation.requested else {
+            completeDismissalContext(operation, completed: false)
+            return
+        }
+        if operation.origin == .uiKit {
+            startDismissalAnimation(operation, to: presenter)
+        } else {
+            backgroundView.passthroughView = interactionView(for: presenter)
+            if animation == nil { completeDismissalContext(operation, completed: true) }
+        }
+    }
+
+    private func startDismissalAnimation(_ operation: Dismissal, to presenter: UIViewController) {
+        guard operation.animated else { return }
+        backgroundView.passthroughView = interactionView(for: presenter)
+        animate(to: .hidden, velocity: operation.velocity) { [weak self] completed in
+            if !completed, self?.dismissal?.requested == true { self?.cancelDismissal() }
+            self?.completeDismissalContext(operation, completed: completed)
+        }
+    }
+
+    private func completeDismissalContext(_ operation: Dismissal, completed: Bool) {
+        guard dismissal === operation, let completion = operation.contextCompletion else { return }
+        if completed && operation.requested {
+            var descendant = presentedViewController.presentedViewController
+            while let controller = descendant {
+                descendant = controller.presentedViewController
+                guard let owner = controller.presentationController as? PanModalPresentationController,
+                      let childOperation = owner.dismissal else { continue }
+                childOperation.completions.append { [self] in completeDismissalContext(operation, completed: true) }
+                return
+            }
+        }
+        operation.contextCompletion = nil
+        completion(completed && operation.requested)
+        if operation.origin == .uiKit { completeDismissal(operation) }
+    }
+
+    private func animate(to destination: PresentationState, velocity: CGFloat = 0, completion: ((Bool) -> Void)? = nil) {
+        setPanFrameRateActive(false)
+        captureAnimation()?.completion?(false)
+        if destination != .hidden { backgroundView.passthroughView = nil }
+        let target = position(for: destination)
+        let duration = presentable?.transitionDuration ?? PanModalAnimator.Constants.defaultTransitionDuration
+        let distance = target - presentedView.frame.minY
+        // At the exact destination, retain UIKit's resting-endpoint behavior.
+        guard distance != 0, duration > 0, UIView.areAnimationsEnabled else {
+            UIView.performWithoutAnimation { adjust(toYPosition: target) }
+            completion?(true)
+            return
+        }
+        let normalizedVelocity = velocity / distance
+        let timing = UISpringTimingParameters(
+            dampingRatio: presentable?.springDamping ?? 1,
+            initialVelocity: CGVector(dx: normalizedVelocity, dy: normalizedVelocity)
+        )
+        let animator = UIViewPropertyAnimator(
+            duration: duration,
+            timingParameters: timing
+        )
+        animator.isUserInteractionEnabled = true
+        animator.addAnimations { [weak self] in self?.adjust(toYPosition: target) }
+        animator.addCompletion { [weak self, weak animator] position in
+            guard let self = self, self.animation?.animator === animator else { return }
+            self.animation = nil
+            completion?(position == .end)
+        }
+        animation = Animation(destination: destination, animator: animator, completion: completion)
+        animator.startAnimation()
+    }
+
+    private func captureAnimation() -> Animation? {
+        guard let animation = animation else { return nil }
+        let y = presentedView.layer.presentation()?.frame.minY ?? presentedView.frame.minY
+        let opacity = backgroundView.layer.presentation()?.opacity ?? backgroundView.layer.opacity
+        self.animation = nil
+        animation.animator.stopAnimation(true)
+        UIView.performWithoutAnimation {
+            presentedView.frame.origin.y = y
+            yPosition = y
+            backgroundView.layer.opacity = opacity
+        }
+        return animation
+    }
+
+    private func configureCorners() {
+        let layer = presentedView.layer
+        layer.cornerRadius = presentable?.shouldRoundTopCorners == true ? presentable?.cornerRadius ?? 0 : 0
+        layer.cornerCurve = .continuous
+        layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        layer.masksToBounds = presentable?.shouldRoundTopCorners == true
     }
 }
 

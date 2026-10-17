@@ -30,6 +30,16 @@ public extension PanModalPresentable where Self: UIViewController {
         presentedVC?.transition(to: state)
     }
 
+    /// Dismisses the presented PanModal. Completion also runs if a grab cancels dismissal.
+    /// Completes immediately when this controller is not presented as a PanModal.
+    func panModalDismiss(animated: Bool = true, completion: (() -> Void)? = nil) {
+        guard presentingViewController != nil, let controller = presentedVC else {
+            completion?()
+            return
+        }
+        controller.dismiss(animated: animated, completion: completion)
+    }
+
     /**
      A function wrapper over the `setNeedsLayoutUpdate()`
      function in the PanModalPresentationController.

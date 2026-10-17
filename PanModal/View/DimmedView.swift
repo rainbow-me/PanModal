@@ -13,33 +13,10 @@ import UIKit
  */
 public class DimmedView: UIView {
 
-    /**
-     Represents the possible states of the dimmed view.
-     max, off or a percentage of dimAlpha.
-     */
-    enum DimState {
-        case max
-        case off
-        case percent(CGFloat)
-    }
-
     // MARK: - Properties
 
-    /**
-     The state of the dimmed view
-     */
-    var dimState: DimState = .off {
-        didSet {
-            switch dimState {
-            case .max:
-                alpha = 1.0
-            case .off:
-                alpha = 0.0
-            case .percent(let percentage):
-                alpha = max(0.0, min(1.0, percentage))
-            }
-        }
-    }
+    /// The surviving presentation receives background touches during an exit.
+    weak var passthroughView: UIView?
 
     /**
      The closure to be executed when a tap occurs
@@ -57,7 +34,7 @@ public class DimmedView: UIView {
 
     init(dimColor: UIColor = UIColor.black.withAlphaComponent(0.7)) {
         super.init(frame: .zero)
-        alpha = 0.0
+        layer.opacity = 0.0
         backgroundColor = dimColor
         addGestureRecognizer(tapGesture)
     }
@@ -67,6 +44,12 @@ public class DimmedView: UIView {
     }
 
     // MARK: - Event Handlers
+
+    public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let target = passthroughView else { return super.hitTest(point, with: event) }
+        guard bounds.contains(point), let window = window, target.window === window else { return nil }
+        return target.hitTest(convert(point, to: target), with: event)
+    }
 
     @objc private func didTapView() {
         didTap?(tapGesture)

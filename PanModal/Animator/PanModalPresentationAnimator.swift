@@ -64,16 +64,10 @@ public class PanModalPresentationAnimator: NSObject {
      */
     private func animatePresentation(transitionContext: UIViewControllerContextTransitioning) {
 
-        guard
-            let toVC = transitionContext.viewController(forKey: .to),
-            let fromVC = transitionContext.viewController(forKey: .from)
-            else { return }
+        guard let toVC = transitionContext.viewController(forKey: .to) else { return }
 
         let presentable = panModalLayoutType(from: transitionContext)
 
-        // Calls viewWillAppear and viewWillDisappear
-        fromVC.beginAppearanceTransition(false, animated: true)
-        
         // Presents the view in shortForm position, initially
         let yPos: CGFloat = presentable?.shortFormYPos ?? 0.0
 
@@ -81,8 +75,9 @@ public class PanModalPresentationAnimator: NSObject {
         let panView: UIView = transitionContext.containerView.panContainerView ?? toVC.view
 
         // Move presented view offscreen (from the bottom)
+        let startY = transitionContext.containerView.bounds.height
         panView.frame = transitionContext.finalFrame(for: toVC)
-        panView.frame.origin.y = transitionContext.containerView.frame.height
+        panView.frame.origin.y = startY
 
         // Haptic feedback
         if presentable?.isHapticFeedbackEnabled == true {
@@ -92,12 +87,13 @@ public class PanModalPresentationAnimator: NSObject {
         // To make it interactable quicker
         transitionContext.completeTransition(true)
 
-        PanModalAnimator.animate({
-            panView.frame.origin.y = yPos
-        }, config: presentable) { [weak self] didComplete in
-            // Calls viewDidAppear and viewDidDisappear
-            fromVC.endAppearanceTransition()
+        let completion: (Bool) -> Void = { [weak self] _ in
             self?.feedbackGenerator = nil
+        }
+        if let controller = toVC.presentationController as? PanModalPresentationController {
+            controller.animatePresentation(from: startY, completion: completion)
+        } else {
+            PanModalAnimator.animate({ panView.frame.origin.y = yPos }, config: presentable, completion)
         }
     }
 
@@ -111,19 +107,26 @@ public class PanModalPresentationAnimator: NSObject {
             let fromVC = transitionContext.viewController(forKey: .from)
             else { return }
 
-        // Calls viewWillAppear and viewWillDisappear
-        toVC.beginAppearanceTransition(true, animated: true)
-        
         let presentable = panModalLayoutType(from: transitionContext)
         let panView: UIView = transitionContext.containerView.panContainerView ?? fromVC.view
 
-        PanModalAnimator.animate({
-            panView.frame.origin.y = transitionContext.containerView.frame.height
-        }, config: presentable) { didComplete in
-            fromVC.view.removeFromSuperview()
-            // Calls viewDidAppear and viewDidDisappear
-            toVC.endAppearanceTransition()
+        let completion: (Bool) -> Void = { didComplete in
+            if didComplete {
+                fromVC.view.removeFromSuperview()
+            }
+            if didComplete {
+                transitionContext.finishInteractiveTransition()
+            } else {
+                transitionContext.cancelInteractiveTransition()
+            }
             transitionContext.completeTransition(didComplete)
+        }
+        if let controller = fromVC.presentationController as? PanModalPresentationController {
+            controller.animateDismissal(to: toVC, completion: completion)
+        } else {
+            PanModalAnimator.animate({
+                panView.frame.origin.y = transitionContext.containerView.bounds.height
+            }, config: presentable, completion)
         }
     }
 
@@ -137,6 +140,17 @@ public class PanModalPresentationAnimator: NSObject {
         case .dismissal:
             return context.viewController(forKey: .from) as? PanModalPresentable.LayoutType
         }
+    }
+
+}
+
+// MARK: - UIViewControllerInteractiveTransitioning
+
+extension PanModalPresentationAnimator: UIViewControllerInteractiveTransitioning {
+
+    public func startInteractiveTransition(_ transitionContext: UIViewControllerContextTransitioning) {
+        // Keep UIKit input delivery and cancellation available while the native spring runs.
+        animateTransition(using: transitionContext)
     }
 
 }

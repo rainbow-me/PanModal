@@ -21,8 +21,6 @@ import UIKit
  */
 public protocol PanModalPresentable: AnyObject {
  
-    func hide()
-    func unhackParent()
     func onTouchTop(_ dismissing: Bool)
     var ignoreBottomOffset: Bool { get }
     var longFormEnabled: Bool { get }
@@ -110,12 +108,6 @@ public protocol PanModalPresentable: AnyObject {
     */
     var panModalBackgroundColor: UIColor { get }
 
-    /**
-     The drag indicator view color.
-
-     Default value is light gray.
-    */
-    var dragIndicatorBackgroundColor: UIColor { get }
 
     /**
      We configure the panScrollable's scrollIndicatorInsets interally so override this value
@@ -181,13 +173,6 @@ public protocol PanModalPresentable: AnyObject {
      */
     var shouldRoundTopCorners: Bool { get }
 
-    /**
-     A flag to determine if a drag indicator should be shown
-     above the pan modal container view.
-
-     Default value is true.
-     */
-    var showDragIndicator: Bool { get }
 
     /**
      Asks the delegate if the pan modal should respond to the pan modal gesture recognizer.
