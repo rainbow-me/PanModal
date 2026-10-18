@@ -84,6 +84,10 @@ open class PanModalPresentationController: UIPresentationController {
     }
 
     private var dismissal: Dismissal?
+
+    /// Whether dismissal has been requested, including while UIKit waits for a child.
+    public var isDismissing: Bool { dismissal?.requested ?? presentedViewController.isBeingDismissed }
+
     // The form to preserve if UIKit dismissal is canceled, including retained hiding.
     private var presentationState: PresentationState = .shortForm
 
