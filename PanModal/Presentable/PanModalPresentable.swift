@@ -175,13 +175,16 @@ public protocol PanModalPresentable: AnyObject {
 
 
     /**
-     Asks the delegate if the pan modal should respond to the pan modal gesture recognizer.
-     
-     Return false to disable movement on the pan modal but maintain gestures on the presented view.
+     Whether the sheet may respond to the active pan recognizer
 
-     Default value is true.
+     The recognizer may belong to the tracked scroll view. `isPrioritized` is the result
+     of `shouldPrioritizePan(at:)` for this contact
+
+     Return false to leave scrolling available without moving the sheet
+
+     Default value is true
      */
-    func shouldRespond(to panModalGestureRecognizer: UIPanGestureRecognizer) -> Bool
+    func shouldRespond(to panModalGestureRecognizer: UIPanGestureRecognizer, isPrioritized: Bool) -> Bool
 
     /**
      Notifies the delegate when the pan modal gesture recognizer state is either
@@ -195,17 +198,14 @@ public protocol PanModalPresentable: AnyObject {
     func willRespond(to panModalGestureRecognizer: UIPanGestureRecognizer)
 
     /**
-     Asks the delegate if the pan modal gesture recognizer should be prioritized.
+     Whether a drag starting at this point should move the sheet regardless of scroll offset
 
-     For example, you can use this to define a region
-     where you would like to restrict where the pan gesture can start.
+     The point is in the presented view controller's coordinates at the start of contact,
+     using the sheet's visible position if it is animating
 
-     If false, then we rely solely on the internal conditions of when a pan gesture
-     should succeed or fail, such as, if we're actively scrolling on the scrollView.
-
-     Default return value is false.
+     Default value is false
      */
-    func shouldPrioritize(panModalGestureRecognizer: UIPanGestureRecognizer) -> Bool
+    func shouldPrioritizePan(at location: CGPoint) -> Bool
 
     /**
      Asks the delegate if the pan modal should transition to a new state.

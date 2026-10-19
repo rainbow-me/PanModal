@@ -106,8 +106,7 @@ class UserGroupViewController: UITableViewController, PanModalPresentable {
         return false
     }
 
-    func shouldPrioritize(panModalGestureRecognizer: UIPanGestureRecognizer) -> Bool {
-        let location = panModalGestureRecognizer.location(in: view)
+    func shouldPrioritizePan(at location: CGPoint) -> Bool {
         return headerView.frame.contains(location)
     }
 

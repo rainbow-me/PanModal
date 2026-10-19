@@ -86,7 +86,7 @@ public extension PanModalPresentable where Self: UIViewController {
         return isPanModalPresented
     }
 
-    func shouldRespond(to panModalGestureRecognizer: UIPanGestureRecognizer) -> Bool {
+    func shouldRespond(to panModalGestureRecognizer: UIPanGestureRecognizer, isPrioritized: Bool) -> Bool {
         return true
     }
 
@@ -98,7 +98,7 @@ public extension PanModalPresentable where Self: UIViewController {
         return true
     }
 
-    func shouldPrioritize(panModalGestureRecognizer: UIPanGestureRecognizer) -> Bool {
+    func shouldPrioritizePan(at location: CGPoint) -> Bool {
         return false
     }
 
