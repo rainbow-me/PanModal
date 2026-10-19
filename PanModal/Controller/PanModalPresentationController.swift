@@ -80,8 +80,9 @@ open class PanModalPresentationController: UIPresentationController {
     /// Whether dismissal has been requested, including while UIKit waits for a child.
     public var isDismissing: Bool { dismissal?.requested ?? presentedViewController.isBeingDismissed }
 
-    // The form to preserve if UIKit dismissal is canceled, including retained hiding.
-    private var presentationState: PresentationState = .shortForm
+    // Nil before the first transition; otherwise the form to restore after canceled dismissal
+    private var presentationState: PresentationState?
+    private var isPreparingTransition = false
 
     private var hiddenYPosition: CGFloat {
         return containerView?.bounds.height ?? presentedView.frame.maxY
@@ -122,7 +123,6 @@ open class PanModalPresentationController: UIPresentationController {
      The y value for the short form presentation state
      */
     private var shortFormYPosition: CGFloat = 0
-  private var bottomYPos: CGFloat = 0
 
     /**
      The y value for the long form presentation state
@@ -253,7 +253,7 @@ open class PanModalPresentationController: UIPresentationController {
 
     override public func dismissalTransitionWillBegin() {
         if dismissal == nil {
-            let operation = Dismissal(returnState: presentationState, velocity: 0)
+            let operation = Dismissal(returnState: presentationState ?? .shortForm, velocity: 0)
             dismissal = operation
             if operation.requested { presentable?.panModalWillDismiss() }
         }
@@ -348,22 +348,48 @@ public extension PanModalPresentationController {
     }
 
     /**
-     Updates the PanModalPresentationController layout
-     based on values in the PanModalPresentable
-
-     - Note: This should be called whenever any
-     pan modal presentable value changes after the initial presentation
+     Updates layout while preserving an active drag or unchanged animation.
+     At rest, the current form follows changed heights.
+     The optional form is chosen after scroll view binding has been updated.
      */
-    func setNeedsLayoutUpdate() {
-        let activeAnimation = captureAnimation()
+    func setNeedsLayoutUpdate(transitionTo state: () -> PresentationState? = { nil }) {
         scrollObserver?.invalidate()
         scrollObserver = nil
         configureViewLayout()
-        adjustPresentedViewFrame()
+
+        let interrupted = updatePresentedViewFrame()
         configureCorners()
         updateScrollView()
-        if let activeAnimation = activeAnimation {
-            animate(to: activeAnimation.destination, completion: activeAnimation.completion)
+
+        if let target = state(),
+           transition(to: target, velocity: 0, interruptedAnimation: interrupted) {
+            return
+        }
+        if isPreparingTransition {
+            interrupted?.completion?(false)
+            return
+        }
+        if let current = animation {
+            interrupted?.completion?(false)
+            let target = position(for: current.destination)
+            if yPosition != target || backgroundView.layer.opacity != backgroundOpacity(at: target) {
+                _ = captureAnimation()
+                animate(to: current.destination, completion: current.completion)
+            }
+            return
+        }
+        if let interrupted = interrupted {
+            animate(to: interrupted.destination, completion: interrupted.completion)
+            return
+        }
+        guard panResistanceY == nil, let target = presentationState else { return }
+        if dismissal?.requested == true {
+            UIView.performWithoutAnimation { adjust(toYPosition: hiddenYPosition) }
+            return
+        }
+        let y = position(for: target)
+        if yPosition != y || backgroundView.layer.opacity != backgroundOpacity(at: y) {
+            animate(to: target)
         }
     }
 
@@ -411,27 +437,22 @@ private extension PanModalPresentationController {
         adjustPanContainerBackgroundColor()
     }
 
-    /**
-     Reduce height of presentedView so that it sits at the bottom of the screen
-     */
-    func adjustPresentedViewFrame() {
+    private func updatePresentedViewFrame() -> Animation? {
+        guard let frame = containerView?.frame else { return nil }
+        let contentFrame = CGRect(x: 0, y: 0, width: frame.width, height: frame.height - anchoredYPosition)
+        guard presentedView.bounds.size != frame.size || presentedView.frame.minX != frame.minX ||
+              presentedViewController.view.frame != contentFrame else { return nil }
 
-        guard let frame = containerView?.frame
-            else { return }
-
-        let adjustedSize = CGSize(width: frame.size.width, height: frame.size.height - anchoredYPosition)
-        let panFrame = panContainerView.frame
-        panContainerView.frame.size = frame.size
-        
-        if ![shortFormYPosition, longFormYPosition].contains(panFrame.origin.y) {
-            // if the container is already in the correct position, no need to adjust positioning
-            // (rotations & size changes cause positioning to be out of sync)
-            let yPosition = panFrame.origin.y - panFrame.height + frame.height
-            presentedView.frame.origin.y = max(yPosition, anchoredYPosition)
-            self.yPosition = presentedView.frame.origin.y
+        let interrupted = captureAnimation()
+        let y = yPosition
+        UIView.performWithoutAnimation {
+            presentedView.frame = CGRect(origin: CGPoint(x: frame.minX, y: y), size: frame.size)
+            presentedViewController.view.frame = contentFrame
         }
-        panContainerView.frame.origin.x = frame.origin.x
-        presentedViewController.view.frame = CGRect(origin: .zero, size: adjustedSize)
+        if let resistanceY = panResistanceY, min(anchoredYPosition, resistanceY) > y {
+            panResistanceY = y
+        }
+        return interrupted
     }
 
     /**
@@ -466,7 +487,6 @@ private extension PanModalPresentationController {
             else { return }
 
         shortFormYPosition = layoutPresentable.shortFormYPos
-        bottomYPos = layoutPresentable.bottomYPos
         longFormYPosition = layoutPresentable.longFormYPos
         anchorModalToLongForm = layoutPresentable.anchorModalToLongForm
 
@@ -711,16 +731,26 @@ private extension PanModalPresentationController {
         return (abs(velocity) - (1000 * (1 - Constants.snapMovementSensitivity))) > 0
     }
 
-    func transition(to state: PresentationState, velocity: CGFloat) {
-        guard presentable?.shouldTransition(to: state) == true else { return }
+    @discardableResult
+    private func transition(
+        to state: PresentationState,
+        velocity: CGFloat,
+        interruptedAnimation: Animation? = nil
+    ) -> Bool {
+        guard presentable?.shouldTransition(to: state) == true else { return false }
         if presentedViewController.isBeingDismissed {
-            guard state != .hidden, presentedViewController.transitionCoordinator?.isInteractive == true else { return }
+            guard state != .hidden, presentedViewController.transitionCoordinator?.isInteractive == true else { return false }
         }
-        if state != .hidden { cancelDismissal() }
+        let cancelledDismissal = state != .hidden && cancelDismissal(interruptedAnimation: interruptedAnimation)
         presentationState = state
+        let wasPreparingTransition = isPreparingTransition
+        isPreparingTransition = true
         presentable?.willTransition(to: state)
+        isPreparingTransition = wasPreparingTransition
         if state == .hidden { backgroundView.passthroughView = interactionView(for: presentingViewController) }
+        if !cancelledDismissal { interruptedAnimation?.completion?(false) }
         animate(to: state, velocity: velocity)
+        return true
     }
 
     func position(for state: PresentationState) -> CGFloat {
@@ -750,13 +780,13 @@ private extension PanModalPresentationController {
                 operation.requested = true
                 operation.velocity = velocity
                 operation.animated = animated
-                operation.returnState = presentationState
+                operation.returnState = presentationState ?? .shortForm
                 startDismissalAnimation(operation, to: presenter)
                 presentable?.panModalWillDismiss()
             }
             return
         }
-        let operation = Dismissal(returnState: presentationState, velocity: velocity, animated: animated, origin: .panModal)
+        let operation = Dismissal(returnState: presentationState ?? .shortForm, velocity: velocity, animated: animated, origin: .panModal)
         if let completion = completion { operation.completions.append(completion) }
         dismissal = operation
         startDismissalAnimation(operation, to: presenter)
@@ -776,7 +806,7 @@ private extension PanModalPresentationController {
             descendant = controller.presentedViewController
             guard let owner = controller.presentationController as? PanModalPresentationController else { continue }
             if owner.dismissal == nil, controller.isBeingDismissed {
-                owner.dismissal = Dismissal(returnState: owner.presentationState, velocity: 0)
+                owner.dismissal = Dismissal(returnState: owner.presentationState ?? .shortForm, velocity: 0)
                 owner.presentable?.panModalWillDismiss()
             }
             guard let childOperation = owner.dismissal else { continue }
@@ -794,16 +824,18 @@ private extension PanModalPresentationController {
         completions.forEach { $0() }
     }
 
-    private func cancelDismissal() {
+    @discardableResult
+    private func cancelDismissal(interruptedAnimation: Animation? = nil) -> Bool {
         if dismissal == nil, presentedViewController.isBeingDismissed,
            presentedViewController.transitionCoordinator?.isInteractive == true {
-            let operation = Dismissal(returnState: presentationState, velocity: 0)
+            let operation = Dismissal(returnState: presentationState ?? .shortForm, velocity: 0)
             dismissal = operation
         }
+        let cancelledDismissal = dismissal?.requested == true
         let interrupted: Animation?
         if let operation = dismissal, operation.requested {
             operation.requested = false
-            interrupted = captureAnimation()
+            interrupted = interruptedAnimation ?? captureAnimation()
         } else {
             interrupted = nil
         }
@@ -812,12 +844,13 @@ private extension PanModalPresentationController {
             ancestor = controller.presentingViewController
             guard let owner = controller.presentationController as? PanModalPresentationController else { continue }
             guard owner.dismissal?.requested ?? controller.isBeingDismissed else { continue }
-            let returnState = owner.dismissal?.returnState ?? owner.presentationState
+            let returnState = owner.dismissal?.returnState ?? owner.presentationState ?? .shortForm
             owner.cancelDismissal()
             owner.animate(to: returnState)
         }
         interrupted?.completion?(false)
         if let operation = dismissal { completeDismissalContext(operation, completed: false) }
+        return cancelledDismissal
     }
 
     /**
@@ -832,10 +865,13 @@ private extension PanModalPresentationController {
       }
         presentedView.frame.origin.y = yPos
         yPosition = yPos
+        backgroundView.layer.opacity = backgroundOpacity(at: yPos)
+    }
+
+    // Keep position and opacity affine through the native spring
+    private func backgroundOpacity(at y: CGFloat) -> Float {
         let distance = hiddenYPosition - shortFormYPosition
-        // Keep position and opacity affine through the native spring.
-        // Core Animation clamps the rendered opacity, including overshoot.
-        backgroundView.layer.opacity = distance > 0 ? Float((hiddenYPosition - yPos) / distance) : 0
+        return distance > 0 ? Float((hiddenYPosition - y) / distance) : 0
     }
 
     /**
@@ -1090,6 +1126,7 @@ extension PanModalPresentationController {
     }
 
     func animatePresentation(from y: CGFloat, completion: @escaping (Bool) -> Void) {
+        presentationState = .shortForm
         captureAnimation()?.completion?(false)
         UIView.performWithoutAnimation {
             presentedView.frame.origin.y = y

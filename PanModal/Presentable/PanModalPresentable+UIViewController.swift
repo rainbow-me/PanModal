@@ -41,13 +41,12 @@ public extension PanModalPresentable where Self: UIViewController {
     }
 
     /**
-     A function wrapper over the `setNeedsLayoutUpdate()`
-     function in the PanModalPresentationController.
-
-     - Note: This should be called whenever any of the values for the PanModalPresentable protocol are changed.
+     Refreshes layout after PanModalPresentable values change, preserving an active drag.
+     At rest, the current form follows changed heights.
+     The optional form is chosen synchronously after layout.
      */
-    func panModalSetNeedsLayoutUpdate() {
-        presentedVC?.setNeedsLayoutUpdate()
+    func panModalSetNeedsLayoutUpdate(transitionTo state: () -> PanModalPresentationController.PresentationState? = { nil }) {
+        presentedVC?.setNeedsLayoutUpdate(transitionTo: state)
     }
 
     /**
