@@ -36,6 +36,7 @@ open class PanModalPresentationController: UIPresentationController {
      Constants
      */
     struct Constants {
+        static let overdragDistance = CGFloat(12)
         static let snapMovementSensitivity = CGFloat(0.7)
     }
 
@@ -93,6 +94,12 @@ open class PanModalPresentationController: UIPresentationController {
      */
     private var extendsPanScrolling: Bool {
         return scrollView != nil && (presentable?.allowsExtendedPanScrolling ?? false)
+    }
+
+    // Only the active scroll gesture can expand the sheet into scrolling
+    private var panExpansionYPosition: CGFloat {
+        return extendsPanScrolling && !panHasPriority && panSource === scrollView?.panGestureRecognizer
+            ? anchoredYPosition : longFormYPosition
     }
 
     /**
@@ -588,14 +595,14 @@ private extension PanModalPresentationController {
             if let interrupted = captureAnimation() {
                 interrupted.completion?(false)
                 translation = 0
-                panResistanceY = min(longFormYPosition, yPosition)
+                panResistanceY = min(panExpansionYPosition, yPosition)
             }
             if wasDismissing {
                 translation = 0
-                panResistanceY = min(longFormYPosition, yPosition)
+                panResistanceY = min(panExpansionYPosition, yPosition)
             }
             if panResistanceY == nil {
-                panResistanceY = min(longFormYPosition, yPosition)
+                panResistanceY = min(panExpansionYPosition, yPosition)
                 if !isScrollPan, let scrollView = scrollView, scrollView.isDecelerating,
                    scrollView.contentOffset.y >= -scrollView.adjustedContentInset.top {
                     scrollView.setContentOffset(scrollView.contentOffset, animated: false)
@@ -632,7 +639,7 @@ private extension PanModalPresentationController {
             if let interrupted = captureAnimation() {
                 interrupted.completion?(false)
                 translation = 0
-                panResistanceY = min(longFormYPosition, yPosition)
+                panResistanceY = min(panExpansionYPosition, yPosition)
             }
             _ = applyTranslation(translation)
             if isScrollPan, let scrollView = scrollView, scrollViewYOffset >= -scrollView.adjustedContentInset.top {
@@ -712,15 +719,19 @@ private extension PanModalPresentationController {
      Communicate intentions to presentable and adjust subviews in containerView
      */
     func applyTranslation(_ translation: CGFloat) -> CGFloat {
+        guard translation != 0 else { return 0 }
         let y = yPosition
-        let resistanceY = panResistanceY ?? longFormYPosition
+        let resistanceY = panResistanceY ?? panExpansionYPosition
+        let distance = Constants.overdragDistance
         // Invert resistance so the result does not depend on callback size
-        let unresistedY = y < resistanceY ? resistanceY + 2 * (y - resistanceY) : y
+        let unresistedY = y < resistanceY ? resistanceY + distance * sinh((y - resistanceY) / distance) : y
         let proposedY = unresistedY + translation
-        let nextY = proposedY < resistanceY ? resistanceY + (proposedY - resistanceY) / 2 : proposedY
+        let nextY = proposedY < resistanceY ? resistanceY + distance * asinh((proposedY - resistanceY) / distance) : proposedY
         let resolvedY = max(nextY, min(anchoredYPosition, resistanceY))
         adjust(toYPosition: resolvedY)
-        let resolvedUnresistedY = resolvedY < resistanceY ? resistanceY + 2 * (resolvedY - resistanceY) : resolvedY
+        guard resolvedY != nextY else { return 0 }
+        let resolvedUnresistedY = resolvedY < resistanceY
+            ? resistanceY + distance * sinh((resolvedY - resistanceY) / distance) : resolvedY
         return proposedY - resolvedUnresistedY
     }
 
@@ -763,9 +774,9 @@ private extension PanModalPresentationController {
 
     func releaseVelocity(for velocity: CGFloat) -> CGFloat {
         let y = yPosition
-        let resistanceY = panResistanceY ?? longFormYPosition
+        let resistanceY = panResistanceY ?? panExpansionYPosition
         if y <= min(anchoredYPosition, resistanceY) && velocity < 0 { return 0 }
-        return y < resistanceY || (y == resistanceY && velocity < 0) ? velocity / 2 : velocity
+        return y < resistanceY ? velocity / cosh((y - resistanceY) / Constants.overdragDistance) : velocity
     }
 
     func dismiss(animated: Bool = true, velocity: CGFloat, completion: (() -> Void)? = nil) {
