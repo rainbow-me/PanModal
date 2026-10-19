@@ -159,10 +159,16 @@ open class PanModalPresentationController: UIPresentationController {
         } else {
             view = DimmedView()
         }
-        view.didTap = { [weak self] _ in
-            if self?.presentable?.allowsTapToDismiss == true {
-                self?.dismiss()
-            }
+        view.didTap = { [weak self] recognizer in
+            guard let self = self,
+                  self.presentable?.allowsTapToDismiss == true else { return }
+
+            let sheet = self.presentedView
+            guard let parent = sheet.superview else { return }
+            let frame = sheet.layer.presentation()?.frame ?? sheet.frame
+
+            guard !frame.contains(recognizer.location(in: parent)) else { return }
+            self.dismiss()
         }
         return view
     }()
