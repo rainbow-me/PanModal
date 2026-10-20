@@ -49,7 +49,11 @@ public class DimmedView: UIView, UIGestureRecognizerDelegate {
     // MARK: - Event Handlers
 
     public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard let target = passthroughView else { return super.hitTest(point, with: event) }
+        guard let target = passthroughView else {
+            guard !isHidden, isUserInteractionEnabled, self.point(inside: point, with: event) else { return nil }
+            // Keep the active scrim tappable when it is transparent
+            return super.hitTest(point, with: event) ?? self
+        }
         guard bounds.contains(point), let window = window, target.window === window else { return nil }
         return target.hitTest(convert(point, to: target), with: event)
     }
