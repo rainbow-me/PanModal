@@ -682,16 +682,22 @@ private extension PanModalPresentationController {
                  The `containerView.bounds.height` is used to determine
                  how close the presented view is to the bottom of the screen
                  */
-                let position = nearest(to: yPosition, inValues: [containerView.bounds.height, shortFormYPosition, longFormYPosition])
+                let longFormDistance = abs(yPosition - longFormYPosition)
+                let shortFormDistance = abs(yPosition - shortFormYPosition)
+                let hiddenDistance = abs(yPosition - containerView.bounds.height)
 
-                if position == longFormYPosition {
-                  transition(to: presentable?.longFormEnabled ?? true ? .longForm : .shortForm, velocity: velocity)
+                if hiddenDistance <= min(shortFormDistance, longFormDistance) {
+                    if presentable?.allowsDragToDismiss == false {
+                        transition(to: .shortForm, velocity: velocity)
+                    } else {
+                        dismiss(velocity: velocity)
+                    }
 
-                } else if position == shortFormYPosition || presentable?.allowsDragToDismiss == false {
-                    transition(to: .shortForm, velocity: velocity)
+                } else if longFormDistance < shortFormDistance || longFormYPosition == shortFormYPosition {
+                    transition(to: presentable?.longFormEnabled ?? true ? .longForm : .shortForm, velocity: velocity)
 
                 } else {
-                    dismiss(velocity: velocity)
+                    transition(to: .shortForm, velocity: velocity)
                 }
             }
         case .cancelled, .failed:
