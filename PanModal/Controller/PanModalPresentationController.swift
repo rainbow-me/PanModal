@@ -53,7 +53,7 @@ open class PanModalPresentationController: UIPresentationController {
     private weak var panSource: UIPanGestureRecognizer?
     private var panLocationY: CGFloat = 0
     private var panHasPriority = false
-    private var endPanFrameRateRequest: (() -> Void)?
+    private var endFrameRateRequest: (() -> Void)?
     private var isPresentedViewAnimating: Bool { animation != nil }
 
     // An accepted dismissal outlives its spring and may precede UIKit's transition.
@@ -223,7 +223,7 @@ open class PanModalPresentationController: UIPresentationController {
     // MARK: - Deinitializers
 
     deinit {
-        setPanFrameRateActive(false)
+        endFrameRateRequest?()
         scrollObserver?.invalidate()
         scrollView?.panGestureRecognizer.removeTarget(self, action: #selector(didPanOnPresentedView(_:)))
     }
@@ -264,7 +264,6 @@ open class PanModalPresentationController: UIPresentationController {
             dismissal = operation
             if operation.requested { presentable?.panModalWillDismiss() }
         }
-        if dismissal?.requested == true { setPanFrameRateActive(false) }
         presentedViewController.transitionCoordinator?.animate(alongsideTransition: { [weak self] _ in
             self?.presentingViewController.setNeedsStatusBarAppearanceUpdate()
         })
@@ -294,8 +293,8 @@ open class PanModalPresentationController: UIPresentationController {
         scrollView?.panGestureRecognizer.removeTarget(self, action: #selector(didPanOnPresentedView(_:)))
         scrollView = nil
         panSource = nil
-        setPanFrameRateActive(false)
         panResistanceY = nil
+        updateFrameRateRequest()
         presentable?.panModalDidDismiss()
     }
 
@@ -340,6 +339,7 @@ public extension PanModalPresentationController {
      with scroll observation temporarily disabled.
      */
     func performUpdates(_ updates: () -> Void) {
+        defer { updateFrameRateRequest() }
 
         // Pause scroll observer
         scrollObserver?.invalidate()
@@ -360,6 +360,7 @@ public extension PanModalPresentationController {
      The optional form is chosen after scroll view binding has been updated.
      */
     func setNeedsLayoutUpdate(transitionTo state: () -> PresentationState? = { nil }) {
+        defer { updateFrameRateRequest() }
         scrollObserver?.invalidate()
         scrollObserver = nil
         configureViewLayout()
@@ -540,6 +541,13 @@ private extension PanModalPresentationController {
      */
     @objc func didPanOnPresentedView(_ recognizer: UIPanGestureRecognizer) {
         guard recognizer === panSource else { return }
+        defer {
+            if recognizer.state == .ended || recognizer.state == .cancelled || recognizer.state == .failed {
+                panResistanceY = nil
+                panSource = nil
+            }
+            updateFrameRateRequest()
+        }
         let isScrollPan = recognizer !== panGestureRecognizer
         if isScrollPan && recognizer.numberOfTouches > 1 {
             cancelPan()
@@ -552,13 +560,6 @@ private extension PanModalPresentationController {
         let nativeTranslation = recognizer.translation(in: containerView).y
         var translation = recognizer.state == .began ? (isScrollPan ? 0 : nativeTranslation) : movement
         panLocationY = locationY
-        defer {
-            if recognizer.state == .ended || recognizer.state == .cancelled || recognizer.state == .failed {
-                setPanFrameRateActive(false)
-                panResistanceY = nil
-                panSource = nil
-            }
-        }
 
         guard
             shouldRespond(to: recognizer),
@@ -589,7 +590,6 @@ private extension PanModalPresentationController {
 
         switch recognizer.state {
         case .began, .changed:
-            setPanFrameRateActive(true)
             let wasDismissing = dismissal?.requested ?? presentedViewController.isBeingDismissed
             if wasDismissing || recognizer.state == .began { cancelDismissal() }
             if let interrupted = captureAnimation() {
@@ -620,7 +620,6 @@ private extension PanModalPresentationController {
                     haltScrolling(scrollView)
                 } else if extendsPanScrolling && remaining < 0 {
                     panResistanceY = nil
-                    setPanFrameRateActive(false)
                     scrollView.contentOffset.y = scrollViewYOffset - remaining
                     trackScrolling(scrollView)
                 }
@@ -698,7 +697,6 @@ private extension PanModalPresentationController {
 
     func cancelPan() {
         panSource = nil
-        setPanFrameRateActive(false)
         guard panResistanceY != nil else { return }
         panResistanceY = nil
         guard animation == nil, dismissal?.requested != true else { return }
@@ -953,6 +951,7 @@ private extension PanModalPresentationController {
                 self.cancelPan()
                 scrollView.panGestureRecognizer.removeTarget(self, action: #selector(self.didPanOnPresentedView(_:)))
                 self.scrollView = nil
+                self.updateFrameRateRequest()
                 return
             }
             self.didPanOnScrollView(scrollView, change: change)
@@ -1073,6 +1072,7 @@ extension PanModalPresentationController: UIGestureRecognizerDelegate {
     public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         if gestureRecognizer === panGestureRecognizer,
            gestureRecognizer.state == .possible, gestureRecognizer.numberOfTouches == 0 {
+            defer { updateFrameRateRequest() }
             presentable?.willReceivePanTouch(touch)
             updateScrollView()
             var location = touch.location(in: containerView)
@@ -1113,25 +1113,27 @@ extension PanModalPresentationController: UIGestureRecognizerDelegate {
 
 extension PanModalPresentationController {
 
-    private func setPanFrameRateActive(_ active: Bool) {
-        guard active else {
-            let endRequest = endPanFrameRateRequest
-            endPanFrameRateRequest = nil
+    private func updateFrameRateRequest() {
+        guard !isPreparingTransition else { return }
+        let isPanning = panResistanceY != nil && (panSource?.state == .began || panSource?.state == .changed)
+        guard animation != nil || isPanning else {
+            let endRequest = endFrameRateRequest
+            endFrameRateRequest = nil
             endRequest?()
             return
         }
-        guard endPanFrameRateRequest == nil else { return }
+        guard endFrameRateRequest == nil else { return }
 
         if #available(iOS 18.0, *), let screen = presentedView.window?.screen {
-            let maximum = Float(screen.maximumFramesPerSecond)
-            guard maximum > 60 else { return }
+            let frameRate = min(120, Float(screen.maximumFramesPerSecond))
+            guard frameRate > 60 else { return }
 
-            // Express tracking intent without scheduling frames or adding a renderer.
+            // Request high refresh throughout motion without scheduling frame callbacks
             let updateLink = UIUpdateLink(view: presentedView)
             updateLink.preferredFrameRateRange = CAFrameRateRange(
-                minimum: min(80, maximum), maximum: maximum, preferred: maximum
+                minimum: frameRate, maximum: frameRate, preferred: frameRate
             )
-            endPanFrameRateRequest = { updateLink.isEnabled = false }
+            endFrameRateRequest = { updateLink.isEnabled = false }
             updateLink.isEnabled = true
         }
     }
@@ -1194,7 +1196,6 @@ extension PanModalPresentationController {
     }
 
     private func animate(to destination: PresentationState, velocity: CGFloat = 0, completion: ((Bool) -> Void)? = nil) {
-        setPanFrameRateActive(false)
         captureAnimation()?.completion?(false)
         if destination != .hidden { backgroundView.passthroughView = nil }
         let target = position(for: destination)
@@ -1204,6 +1205,7 @@ extension PanModalPresentationController {
         guard distance != 0, duration > 0, UIView.areAnimationsEnabled else {
             UIView.performWithoutAnimation { adjust(toYPosition: target) }
             completion?(true)
+            updateFrameRateRequest()
             return
         }
         let normalizedVelocity = velocity / distance
@@ -1221,8 +1223,10 @@ extension PanModalPresentationController {
             guard let self = self, self.animation?.animator === animator else { return }
             self.animation = nil
             completion?(position == .end)
+            self.updateFrameRateRequest()
         }
         animation = Animation(destination: destination, animator: animator, completion: completion)
+        updateFrameRateRequest()
         animator.startAnimation()
     }
 
