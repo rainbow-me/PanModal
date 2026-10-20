@@ -11,7 +11,7 @@ import UIKit
 /**
  A dim view for use as an overlay over content you want dimmed.
  */
-public class DimmedView: UIView {
+public class DimmedView: UIView, UIGestureRecognizerDelegate {
 
     // MARK: - Properties
 
@@ -22,12 +22,15 @@ public class DimmedView: UIView {
      The closure to be executed when a tap occurs
      */
     var didTap: ((_ recognizer: UIGestureRecognizer) -> Void)?
+    var shouldReceiveTap: ((UITouch) -> Bool)?
 
     /**
      Tap gesture recognizer
      */
     private lazy var tapGesture: UIGestureRecognizer = {
-        return UITapGestureRecognizer(target: self, action: #selector(didTapView))
+        let recognizer = UITapGestureRecognizer(target: self, action: #selector(didTapView))
+        recognizer.delegate = self
+        return recognizer
     }()
 
     // MARK: - Initializers
@@ -53,6 +56,10 @@ public class DimmedView: UIView {
 
     @objc private func didTapView() {
         didTap?(tapGesture)
+    }
+
+    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        return shouldReceiveTap?(touch) ?? true
     }
 
 }

@@ -46,6 +46,7 @@ open class PanModalPresentationController: UIPresentationController {
         let destination: PresentationState
         let animator: UIViewPropertyAnimator
         let completion: ((Bool) -> Void)?
+        let isOpening: Bool
     }
 
     private var animation: Animation?
@@ -166,15 +167,20 @@ open class PanModalPresentationController: UIPresentationController {
         } else {
             view = DimmedView()
         }
+        view.shouldReceiveTap = { [weak self] touch in
+            guard let self = self else { return false }
+            guard self.animation?.isOpening == true else { return true }
+            let sheet = self.presentedView
+            guard let parent = sheet.superview else { return false }
+            return !sheet.containsOpaqueBackground(atParentPoint: touch.location(in: parent), usePresentation: false)
+        }
         view.didTap = { [weak self] recognizer in
             guard let self = self,
                   self.presentable?.allowsTapToDismiss == true else { return }
 
             let sheet = self.presentedView
             guard let parent = sheet.superview else { return }
-            let frame = sheet.layer.presentation()?.frame ?? sheet.frame
-
-            guard !frame.contains(recognizer.location(in: parent)) else { return }
+            guard !sheet.containsOpaqueBackground(atParentPoint: recognizer.location(in: parent), usePresentation: true) else { return }
             self.dismiss()
         }
         return view
@@ -321,7 +327,7 @@ public extension PanModalPresentationController {
      to the given presentation state
      */
     func transition(to state: PresentationState) {
-        transition(to: state, velocity: 0)
+        transition(to: state, velocity: 0, isOpening: presentationState == .hidden)
     }
 
     /// Dismisses the sheet. Completion follows UIKit transition settlement,
@@ -370,7 +376,7 @@ public extension PanModalPresentationController {
         updateScrollView()
 
         if let target = state(),
-           transition(to: target, velocity: 0, interruptedAnimation: interrupted) {
+           transition(to: target, velocity: 0, isOpening: presentationState == .hidden, interruptedAnimation: interrupted) {
             return
         }
         if isPreparingTransition {
@@ -381,13 +387,13 @@ public extension PanModalPresentationController {
             interrupted?.completion?(false)
             let target = position(for: current.destination)
             if yPosition != target || backgroundView.layer.opacity != backgroundOpacity(at: target) {
-                _ = captureAnimation()
-                animate(to: current.destination, completion: current.completion)
+                let captured = captureAnimation()
+                animate(to: current.destination, isOpening: captured?.isOpening == true, completion: current.completion)
             }
             return
         }
         if let interrupted = interrupted {
-            animate(to: interrupted.destination, completion: interrupted.completion)
+            animate(to: interrupted.destination, isOpening: interrupted.isOpening, completion: interrupted.completion)
             return
         }
         guard panResistanceY == nil, let target = presentationState else { return }
@@ -744,6 +750,7 @@ private extension PanModalPresentationController {
     private func transition(
         to state: PresentationState,
         velocity: CGFloat,
+        isOpening: Bool = false,
         interruptedAnimation: Animation? = nil
     ) -> Bool {
         guard presentable?.shouldTransition(to: state) == true else { return false }
@@ -751,6 +758,8 @@ private extension PanModalPresentationController {
             guard state != .hidden, presentedViewController.transitionCoordinator?.isInteractive == true else { return false }
         }
         let cancelledDismissal = state != .hidden && cancelDismissal(interruptedAnimation: interruptedAnimation)
+        let isOpening = state != .hidden &&
+            (isOpening || cancelledDismissal || interruptedAnimation?.isOpening == true)
         presentationState = state
         let wasPreparingTransition = isPreparingTransition
         isPreparingTransition = true
@@ -758,7 +767,7 @@ private extension PanModalPresentationController {
         isPreparingTransition = wasPreparingTransition
         if state == .hidden { backgroundView.passthroughView = interactionView(for: presentingViewController) }
         if !cancelledDismissal { interruptedAnimation?.completion?(false) }
-        animate(to: state, velocity: velocity)
+        animate(to: state, velocity: velocity, isOpening: isOpening)
         return true
     }
 
@@ -1146,7 +1155,7 @@ extension PanModalPresentationController {
             yPosition = y
             backgroundView.layer.opacity = 0
         }
-        animate(to: .shortForm, completion: completion)
+        animate(to: .shortForm, isOpening: true, completion: completion)
     }
 
     private func interactionView(for controller: UIViewController) -> UIView? {
@@ -1195,8 +1204,10 @@ extension PanModalPresentationController {
         if operation.origin == .uiKit { completeDismissal(operation) }
     }
 
-    private func animate(to destination: PresentationState, velocity: CGFloat = 0, completion: ((Bool) -> Void)? = nil) {
-        captureAnimation()?.completion?(false)
+    private func animate(to destination: PresentationState, velocity: CGFloat = 0, isOpening: Bool = false, completion: ((Bool) -> Void)? = nil) {
+        let interrupted = captureAnimation()
+        let isOpening = destination != .hidden && (isOpening || interrupted?.isOpening == true)
+        interrupted?.completion?(false)
         if destination != .hidden { backgroundView.passthroughView = nil }
         let target = position(for: destination)
         let duration = presentable?.transitionDuration ?? PanModalAnimator.Constants.defaultTransitionDuration
@@ -1225,7 +1236,7 @@ extension PanModalPresentationController {
             completion?(position == .end)
             self.updateFrameRateRequest()
         }
-        animation = Animation(destination: destination, animator: animator, completion: completion)
+        animation = Animation(destination: destination, animator: animator, completion: completion, isOpening: isOpening)
         updateFrameRateRequest()
         animator.startAnimation()
     }
@@ -1254,6 +1265,26 @@ extension PanModalPresentationController {
 }
 
 // MARK: - Helper Extensions
+
+private extension UIView {
+
+    func containsOpaqueBackground(atParentPoint point: CGPoint, usePresentation: Bool) -> Bool {
+        guard let layer = usePresentation ? self.layer.presentation() : self.layer,
+              !layer.isHidden, layer.opacity > 0 else { return false }
+        let point = layer.convert(point, from: layer.superlayer)
+        let containsPoint = layer.bounds.contains(point)
+        guard containsPoint || !layer.masksToBounds else { return false }
+        if containsPoint, backgroundColor?.resolvedColor(with: traitCollection).cgColor.alpha == 1 {
+            return true
+        }
+        for subview in subviews {
+            if subview.containsOpaqueBackground(atParentPoint: point, usePresentation: usePresentation) {
+                return true
+            }
+        }
+        return false
+    }
+}
 
 private extension UIScrollView {
 
