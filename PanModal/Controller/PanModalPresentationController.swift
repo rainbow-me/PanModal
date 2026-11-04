@@ -97,9 +97,16 @@ open class PanModalPresentationController: UIPresentationController {
         return scrollView != nil && (presentable?.allowsExtendedPanScrolling ?? false)
     }
 
-    // Only the active scroll gesture can expand the sheet into scrolling
     private var panExpansionYPosition: CGFloat {
-        return extendsPanScrolling && !panHasPriority && panSource === scrollView?.panGestureRecognizer
+        guard extendsPanScrolling, !panHasPriority,
+              let scrollView = scrollView,
+              panSource === scrollView.panGestureRecognizer else {
+            return longFormYPosition
+        }
+
+        let insets = scrollView.adjustedContentInset
+        let contentHeight = scrollView.contentSize.height + insets.top + insets.bottom
+        return contentHeight > scrollView.bounds.height
             ? anchoredYPosition : longFormYPosition
     }
 
