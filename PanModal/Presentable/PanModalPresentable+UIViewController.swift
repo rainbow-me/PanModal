@@ -30,14 +30,23 @@ public extension PanModalPresentable where Self: UIViewController {
         presentedVC?.transition(to: state)
     }
 
-    /**
-     A function wrapper over the `setNeedsLayoutUpdate()`
-     function in the PanModalPresentationController.
+    /// Dismisses the presented PanModal. Completion also runs if a grab cancels dismissal.
+    /// Completes immediately when this controller is not presented as a PanModal.
+    func panModalDismiss(animated: Bool = true, completion: (() -> Void)? = nil) {
+        guard presentingViewController != nil, let controller = presentedVC else {
+            completion?()
+            return
+        }
+        controller.dismiss(animated: animated, completion: completion)
+    }
 
-     - Note: This should be called whenever any of the values for the PanModalPresentable protocol are changed.
+    /**
+     Refreshes layout after PanModalPresentable values change, preserving an active drag.
+     At rest, the current form follows changed heights.
+     The optional form is chosen synchronously after layout.
      */
-    func panModalSetNeedsLayoutUpdate() {
-        presentedVC?.setNeedsLayoutUpdate()
+    func panModalSetNeedsLayoutUpdate(transitionTo state: () -> PanModalPresentationController.PresentationState? = { nil }) {
+        presentedVC?.setNeedsLayoutUpdate(transitionTo: state)
     }
 
     /**

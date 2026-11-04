@@ -21,8 +21,6 @@ import UIKit
  */
 public protocol PanModalPresentable: AnyObject {
  
-    func hide()
-    func unhackParent()
     func onTouchTop(_ dismissing: Bool)
     var ignoreBottomOffset: Bool { get }
     var longFormEnabled: Bool { get }
@@ -34,6 +32,14 @@ public protocol PanModalPresentable: AnyObject {
      and the pan modal container view.
      */
     var panScrollable: UIScrollView? { get }
+
+    /**
+     Selects the panScrollable for a new touch sequence, before recognizer arbitration.
+     Update selection here without calling panModalSetNeedsLayoutUpdate(); the
+     presentation controller binds the result synchronously after this returns.
+     Changes outside this callback still require panModalSetNeedsLayoutUpdate().
+     */
+    func willReceivePanTouch(_ touch: UITouch)
 
     /**
      The offset between the top of the screen and the top of the pan modal container view.
@@ -102,12 +108,6 @@ public protocol PanModalPresentable: AnyObject {
     */
     var panModalBackgroundColor: UIColor { get }
 
-    /**
-     The drag indicator view color.
-
-     Default value is light gray.
-    */
-    var dragIndicatorBackgroundColor: UIColor { get }
 
     /**
      We configure the panScrollable's scrollIndicatorInsets interally so override this value
@@ -129,7 +129,8 @@ public protocol PanModalPresentable: AnyObject {
      A flag to determine if scrolling should seamlessly transition from the pan modal container view to
      the embedded scroll view once the scroll limit has been reached.
 
-     Default value is false. Unless a scrollView is provided and the content height exceeds the longForm height.
+     Defaults to true when a panScrollable is provided. Content size does not
+     revoke coordination: a shrinking list may still be scrolled away from its top.
      */
     var allowsExtendedPanScrolling: Bool { get }
 
@@ -172,22 +173,18 @@ public protocol PanModalPresentable: AnyObject {
      */
     var shouldRoundTopCorners: Bool { get }
 
-    /**
-     A flag to determine if a drag indicator should be shown
-     above the pan modal container view.
-
-     Default value is true.
-     */
-    var showDragIndicator: Bool { get }
 
     /**
-     Asks the delegate if the pan modal should respond to the pan modal gesture recognizer.
-     
-     Return false to disable movement on the pan modal but maintain gestures on the presented view.
+     Whether the sheet may respond to the active pan recognizer
 
-     Default value is true.
+     The recognizer may belong to the tracked scroll view. `isPrioritized` is the result
+     of `shouldPrioritizePan(at:)` for this contact
+
+     Return false to leave scrolling available without moving the sheet
+
+     Default value is true
      */
-    func shouldRespond(to panModalGestureRecognizer: UIPanGestureRecognizer) -> Bool
+    func shouldRespond(to panModalGestureRecognizer: UIPanGestureRecognizer, isPrioritized: Bool) -> Bool
 
     /**
      Notifies the delegate when the pan modal gesture recognizer state is either
@@ -201,17 +198,14 @@ public protocol PanModalPresentable: AnyObject {
     func willRespond(to panModalGestureRecognizer: UIPanGestureRecognizer)
 
     /**
-     Asks the delegate if the pan modal gesture recognizer should be prioritized.
+     Whether a drag starting at this point should move the sheet regardless of scroll offset
 
-     For example, you can use this to define a region
-     where you would like to restrict where the pan gesture can start.
+     The point is in the presented view controller's coordinates at the start of contact,
+     using the sheet's visible position if it is animating
 
-     If false, then we rely solely on the internal conditions of when a pan gesture
-     should succeed or fail, such as, if we're actively scrolling on the scrollView.
-
-     Default return value is false.
+     Default value is false
      */
-    func shouldPrioritize(panModalGestureRecognizer: UIPanGestureRecognizer) -> Bool
+    func shouldPrioritizePan(at location: CGPoint) -> Bool
 
     /**
      Asks the delegate if the pan modal should transition to a new state.

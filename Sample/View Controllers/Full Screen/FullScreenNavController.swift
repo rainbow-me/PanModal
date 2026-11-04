@@ -42,9 +42,6 @@ extension FullScreenNavController: PanModalPresentable {
         return false
     }
 
-    var showDragIndicator: Bool {
-        return false
-    }
 }
 
 private class FullScreenViewController: UIViewController {
