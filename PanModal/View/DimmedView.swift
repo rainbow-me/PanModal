@@ -11,53 +11,33 @@ import UIKit
 /**
  A dim view for use as an overlay over content you want dimmed.
  */
-public class DimmedView: UIView {
-
-    /**
-     Represents the possible states of the dimmed view.
-     max, off or a percentage of dimAlpha.
-     */
-    enum DimState {
-        case max
-        case off
-        case percent(CGFloat)
-    }
+public class DimmedView: UIView, UIGestureRecognizerDelegate {
 
     // MARK: - Properties
 
-    /**
-     The state of the dimmed view
-     */
-    var dimState: DimState = .off {
-        didSet {
-            switch dimState {
-            case .max:
-                alpha = 1.0
-            case .off:
-                alpha = 0.0
-            case .percent(let percentage):
-                alpha = max(0.0, min(1.0, percentage))
-            }
-        }
-    }
+    /// The surviving presentation receives background touches during an exit.
+    weak var passthroughView: UIView?
 
     /**
      The closure to be executed when a tap occurs
      */
     var didTap: ((_ recognizer: UIGestureRecognizer) -> Void)?
+    var shouldReceiveTap: ((UITouch) -> Bool)?
 
     /**
      Tap gesture recognizer
      */
     private lazy var tapGesture: UIGestureRecognizer = {
-        return UITapGestureRecognizer(target: self, action: #selector(didTapView))
+        let recognizer = UITapGestureRecognizer(target: self, action: #selector(didTapView))
+        recognizer.delegate = self
+        return recognizer
     }()
 
     // MARK: - Initializers
 
     init(dimColor: UIColor = UIColor.black.withAlphaComponent(0.7)) {
         super.init(frame: .zero)
-        alpha = 0.0
+        layer.opacity = 0.0
         backgroundColor = dimColor
         addGestureRecognizer(tapGesture)
     }
@@ -68,8 +48,22 @@ public class DimmedView: UIView {
 
     // MARK: - Event Handlers
 
+    public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let target = passthroughView else {
+            guard !isHidden, isUserInteractionEnabled, self.point(inside: point, with: event) else { return nil }
+            // Keep the active scrim tappable when it is transparent
+            return super.hitTest(point, with: event) ?? self
+        }
+        guard bounds.contains(point), let window = window, target.window === window else { return nil }
+        return target.hitTest(convert(point, to: target), with: event)
+    }
+
     @objc private func didTapView() {
         didTap?(tapGesture)
+    }
+
+    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        return shouldReceiveTap?(touch) ?? true
     }
 
 }

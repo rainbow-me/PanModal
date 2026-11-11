@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-    <img src="https://img.shields.io/badge/Platform-iOS_10+-green.svg" alt="Platform: iOS 10.0+" />
+    <img src="https://img.shields.io/badge/Platform-iOS_13+-green.svg" alt="Platform: iOS 13.0+" />
     <a href="https://developer.apple.com/swift" target="_blank"><img src="https://img.shields.io/badge/Language-Swift_5-blueviolet.svg" alt="Language: Swift 5" /></a>
     <a href="https://cocoapods.org/pods/PanModal" target="_blank"><img src="https://img.shields.io/badge/CocoaPods-v1.0-red.svg" alt="CocoaPods compatible" /></a>
     <a href="https://github.com/Carthage/Carthage" target="_blank"><img src="https://img.shields.io/badge/Carthage-compatible-blue.svg" alt="Carthage compatible" /></a>
@@ -38,7 +38,7 @@ Swift 4.2 support can be found on the `Swift4.2` branch.
 
 ## Compatibility
 
-PanModal requires **iOS 10+** and is compatible with **Swift 4.2** projects.
+PanModal requires **iOS 13+** and is compatible with **Swift 4.2** projects.
 
 ## Installation
 

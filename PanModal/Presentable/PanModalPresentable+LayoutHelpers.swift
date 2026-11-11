@@ -31,7 +31,7 @@ extension PanModalPresentable where Self: UIViewController {
         guard let rootVC = rootViewController
             else { return 0}
 
-        if #available(iOS 11.0, *) { return rootVC.view.safeAreaInsets.top } else { return rootVC.topLayoutGuide.length }
+        return rootVC.view.safeAreaInsets.top
     }
 
     /**
@@ -43,7 +43,7 @@ extension PanModalPresentable where Self: UIViewController {
        guard let rootVC = rootViewController
             else { return 0}
 
-        if #available(iOS 11.0, *) { return rootVC.view.safeAreaInsets.bottom } else { return rootVC.bottomLayoutGuide.length }
+        return rootVC.view.safeAreaInsets.bottom
     }
 
     /**

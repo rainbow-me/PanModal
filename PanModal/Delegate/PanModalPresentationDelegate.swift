@@ -45,6 +45,10 @@ extension PanModalPresentationDelegate: UIViewControllerTransitioningDelegate {
         return PanModalPresentationAnimator(transitionStyle: .dismissal)
     }
 
+    public func interactionControllerForDismissal(using animator: UIViewControllerAnimatedTransitioning) -> UIViewControllerInteractiveTransitioning? {
+        return animator as? PanModalPresentationAnimator
+    }
+
     /**
      Returns a modal presentation controller to coordinate the transition from the presenting
      view controller to the presented view controller.

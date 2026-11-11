@@ -51,10 +51,6 @@ public extension PanModalPresentable where Self: UIViewController {
         return UIColor.black.withAlphaComponent(0.7)
     }
 
-    var dragIndicatorBackgroundColor: UIColor {
-        return UIColor.lightGray
-    }
-
     var scrollIndicatorInsets: UIEdgeInsets {
         let top = shouldRoundTopCorners ? cornerRadius : 0
         return UIEdgeInsets(top: CGFloat(top), left: 0, bottom: bottomLayoutOffset, right: 0)
@@ -64,13 +60,10 @@ public extension PanModalPresentable where Self: UIViewController {
         return true
     }
 
+    func willReceivePanTouch(_ touch: UITouch) {}
+
     var allowsExtendedPanScrolling: Bool {
-
-        guard let scrollView = panScrollable
-            else { return false }
-
-        scrollView.layoutIfNeeded()
-        return scrollView.contentSize.height > (scrollView.frame.height - bottomLayoutOffset)
+        return panScrollable != nil
     }
 
     var allowsDragToDismiss: Bool {
@@ -93,11 +86,7 @@ public extension PanModalPresentable where Self: UIViewController {
         return isPanModalPresented
     }
 
-    var showDragIndicator: Bool {
-        return shouldRoundTopCorners
-    }
-
-    func shouldRespond(to panModalGestureRecognizer: UIPanGestureRecognizer) -> Bool {
+    func shouldRespond(to panModalGestureRecognizer: UIPanGestureRecognizer, isPrioritized: Bool) -> Bool {
         return true
     }
 
@@ -109,7 +98,7 @@ public extension PanModalPresentable where Self: UIViewController {
         return true
     }
 
-    func shouldPrioritize(panModalGestureRecognizer: UIPanGestureRecognizer) -> Bool {
+    func shouldPrioritizePan(at location: CGPoint) -> Bool {
         return false
     }
 
